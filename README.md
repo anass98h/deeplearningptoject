@@ -29,7 +29,7 @@ The system consists of three main components:
 ## Technologies Used
 
 - **Frontend**:
-  - HTML5, CSS3, JavaScript
+  - NextJs
   - TensorFlow.js
   - PoseNet model
   - Webcam API
