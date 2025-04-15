@@ -1,0 +1,2 @@
+architecture,window_size,num_layers,units,learning_rate,fold1_mse,fold2_mse,fold3_mse,fold4_mse,fold5_mse,fold6_mse,fold7_mse,fold8_mse,fold9_mse,fold10_mse,avg_mse,avg_mae,training_time_sec
+dense,3,2,64,0.5,0.011133402585983276,0.012170429341495037,0.010786142200231552,,,,,,,,0.011363324709236622,0.08340661476055782,48.5608549118042
