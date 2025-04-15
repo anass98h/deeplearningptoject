@@ -22,7 +22,7 @@ export default function Dashboard() {
           </p>
         </div>
 
-        <Tabs defaultValue="posenet" className="w-full">
+        <Tabs defaultValue="csv" className="w-full">
           <TabsList className="grid w-full max-w-md grid-cols-2 mb-8 p-1 bg-gray-100 rounded-lg">
             <TabsTrigger
               value="csv"
