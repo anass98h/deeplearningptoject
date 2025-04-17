@@ -50,6 +50,7 @@ export function CSVPrediction() {
   // 3D visualization state
   const [poseData, setPoseData] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState("data");
+  const [dataKey, setDataKey] = useState(0); // Used to force re-render of visualization
 
   const BACKEND_URL =
     process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
@@ -167,9 +168,12 @@ export function CSVPrediction() {
       const text = await file.text();
       const lines = text.split("\n");
 
+      if (lines.length === 0) {
+        throw new Error("CSV file is empty");
+      }
+
       // Try to detect delimiter (tab or comma)
       const firstLine = lines[0];
-      // Check if we have quoted columns which may contain commas
       const delimiter = firstLine.includes("\t") ? "\t" : ",";
 
       // Parse headers, making sure to handle spaces after the delimiter
@@ -206,7 +210,7 @@ export function CSVPrediction() {
 
       // Convert to format for 3D visualization - object with properties for each column
       const objectRows = rows.map((row) => {
-        const obj = {};
+        const obj: Record<string, any> = {}; // Explicitly type the object
         headers.forEach((header, index) => {
           obj[header] = row[index];
         });
@@ -216,12 +220,20 @@ export function CSVPrediction() {
       console.log(
         `Created ${objectRows.length} object rows for 3D visualization`
       );
-      console.log(
-        "Sample object:",
-        objectRows.length > 0 ? objectRows[0] : "No objects"
-      );
 
-      setPoseData(objectRows);
+      // Log a sample object to debug
+      if (objectRows.length > 0) {
+        console.log("Sample object row:", objectRows[0]);
+      }
+
+      // Clear any previous data first
+      setPoseData([]);
+
+      // Use setTimeout to ensure the component has time to reset
+      setTimeout(() => {
+        setPoseData(objectRows);
+        setDataKey((prev) => prev + 1); // Force re-render of the visualization
+      }, 100);
     } catch (err) {
       console.error("Error processing CSV:", err);
       setError("Failed to process CSV file. Please check the format.");
@@ -371,6 +383,7 @@ export function CSVPrediction() {
                     <Button
                       onClick={() => setActiveTab("visualization")}
                       className="bg-gradient-to-r from-indigo-500 to-blue-500 hover:from-indigo-600 hover:to-blue-600 text-white shadow-md"
+                      disabled={!poseData || poseData.length === 0}
                     >
                       <Box className="mr-2 h-4 w-4" />
                       View 3D Visualization
@@ -379,7 +392,7 @@ export function CSVPrediction() {
 
                   <div className="border rounded-lg overflow-auto shadow-md bg-white">
                     <h4 className="p-3 font-medium text-gray-700 border-b bg-gray-50">
-                      Data (First 5 Rows)
+                      Data (First 10 Rows)
                     </h4>
                     <div className="max-h-[400px] overflow-auto">
                       <Table>
@@ -438,7 +451,11 @@ export function CSVPrediction() {
 
             <TabsContent value="visualization" className="pt-4">
               {poseData && poseData.length > 0 ? (
-                <PoseNet3DVisualization poseData={poseData} />
+                <div key={dataKey}>
+                  {" "}
+                  {/* Force re-render with key */}
+                  <PoseNet3DVisualization poseData={poseData} />
+                </div>
               ) : (
                 <div className="p-12 text-center bg-gray-50 rounded-lg border border-gray-200">
                   <p className="text-gray-500">
