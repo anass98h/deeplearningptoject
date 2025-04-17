@@ -25,6 +25,9 @@ import {
 import * as tf from "@tensorflow/tfjs";
 import * as posenet from "@tensorflow-models/posenet";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 // Define the connections between keypoints for drawing skeleton
 const skeleton = [
   // Torso

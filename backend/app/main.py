@@ -554,3 +554,44 @@ async def predict_depth(
             detail=str(e),
             headers={"error_type": "prediction_error"}
         )
+    
+
+@app.get("/kinect-data", 
+         responses={
+             404: {"model": ErrorResponse},
+             500: {"model": ErrorResponse}
+         })
+async def get_kinect_data():
+    """
+    Simple endpoint to serve the A1_kinect.csv data for posenet visualization.
+    Returns the file content directly from disk. The file should be placed in the 'data' directory.
+    """
+    try:
+        # Path to the CSV file
+        csv_path = Path("./A1_kinect.csv")
+        
+        # Check if file exists
+        if not csv_path.exists():
+            raise HTTPException(
+                status_code=404,
+                detail="A1_kinect.csv file not found. Please place the file in the 'data' directory.",
+                headers={"error_type": "file_not_found"}
+            )
+        
+        # Simply read and return the file contents
+        with open(csv_path, "r") as f:
+            csv_content = f.read()
+        
+        # Return the raw file content
+        return {
+            "content": csv_content
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error serving CSV file: {str(e)}",
+            headers={"error_type": "file_read_error"}
+        )
