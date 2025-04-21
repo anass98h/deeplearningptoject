@@ -9,6 +9,10 @@ import {
 import { CSVPrediction } from "@/components/csv-prediction";
 import PoseNetPrediction from "@/components/posenet-prediction";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+
 export default function Dashboard() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-gray-50 to-gray-100">
