@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useRef, useEffect, useState } from "react";
+import React, { useRef, useEffect, useState, useCallback } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
 import { Button } from "@/components/ui/button";
@@ -10,7 +10,6 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
-  CardFooter,
 } from "@/components/ui/card";
 import { Slider } from "@/components/ui/slider";
 import { Play, Pause, RotateCcw, MoveHorizontal, Box, Bug } from "lucide-react";
@@ -57,6 +56,7 @@ export function PoseNet3DVisualization({ poseData, showControls = true }) {
   const [debugMessages, setDebugMessages] = useState([]);
   const [debugVisible, setDebugVisible] = useState(false);
   const [webglInfo, setWebglInfo] = useState(null);
+  const lastLogTimeRef = useRef(0); // For throttling logs
 
   // DOM refs
   const containerRef = useRef(null);
@@ -68,6 +68,9 @@ export function PoseNet3DVisualization({ poseData, showControls = true }) {
   const controlsRef = useRef(null);
   const animationFrameRef = useRef(null);
   const timerRef = useRef(null);
+  const frameRateRef = useRef(0);
+  const frameCountRef = useRef(0);
+  const lastFrameTimeRef = useRef(0);
 
   // Scene objects
   const keypointMeshesRef = useRef({});
@@ -82,9 +85,24 @@ export function PoseNet3DVisualization({ poseData, showControls = true }) {
   const [visibleKeypoints, setVisibleKeypoints] = useState(0);
   const [visibleBones, setVisibleBones] = useState(0);
   const [sceneError, setSceneError] = useState(null);
+  const [fps, setFps] = useState(0);
 
-  // Custom debug logger
-  const logDebug = (message, data = null) => {
+  // Custom debug logger with throttling
+  const logDebug = useCallback((message, data = null) => {
+    const now = Date.now();
+    // Only log if it's been at least 100ms since the last log of this type
+    // or if it's a critical message
+    const isCritical =
+      message.includes("error") ||
+      message.includes("warning") ||
+      message.includes("initialize") ||
+      message.includes("cleanup");
+
+    if (now - lastLogTimeRef.current < 100 && !isCritical) {
+      return;
+    }
+
+    lastLogTimeRef.current = now;
     const timestamp = new Date().toISOString().split("T")[1].split(".")[0];
     const formattedMessage = `[${timestamp}] ${message}`;
     console.log(formattedMessage, data);
@@ -100,10 +118,10 @@ export function PoseNet3DVisualization({ poseData, showControls = true }) {
       ].slice(0, 20); // Keep only last 20 messages
       return newMessages;
     });
-  };
+  }, []);
 
   // Check WebGL capabilities
-  const checkWebGLCapabilities = () => {
+  const checkWebGLCapabilities = useCallback(() => {
     try {
       const canvas = document.createElement("canvas");
       const gl =
@@ -121,7 +139,6 @@ export function PoseNet3DVisualization({ poseData, showControls = true }) {
         vendor: gl.getParameter(gl.VENDOR),
         renderer: gl.getParameter(gl.RENDERER),
         maxTexSize: gl.getParameter(gl.MAX_TEXTURE_SIZE),
-        maxViewportDims: gl.getParameter(gl.MAX_VIEWPORT_DIMS),
       };
 
       const debugInfo = gl.getExtension("WEBGL_debug_renderer_info");
@@ -139,24 +156,22 @@ export function PoseNet3DVisualization({ poseData, showControls = true }) {
       setSceneError(errorMsg);
       return false;
     }
-  };
+  }, [logDebug]);
 
   // Cleanup function for Three.js objects
-  const cleanup = () => {
+  const cleanup = useCallback(() => {
     logDebug("Cleaning up Three.js scene");
 
     // Cancel animation frame
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current);
       animationFrameRef.current = null;
-      logDebug("Cancelled animation frame");
     }
 
     // Clear animation timer
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
-      logDebug("Cleared animation timer");
     }
 
     // Dispose of Three.js objects
@@ -168,7 +183,6 @@ export function PoseNet3DVisualization({ poseData, showControls = true }) {
         if (sceneRef.current) sceneRef.current.remove(mesh);
       });
       keypointMeshesRef.current = {};
-      logDebug("Disposed keypoint meshes");
 
       // Dispose of bones
       bonesRef.current.forEach(({ line }) => {
@@ -177,14 +191,12 @@ export function PoseNet3DVisualization({ poseData, showControls = true }) {
         if (sceneRef.current) sceneRef.current.remove(line);
       });
       bonesRef.current = [];
-      logDebug("Disposed bone lines");
 
       // Clear scene
       while (sceneRef.current.children.length > 0) {
         const object = sceneRef.current.children[0];
         sceneRef.current.remove(object);
       }
-      logDebug("Cleared scene children");
     }
 
     // Remove renderer from DOM
@@ -195,7 +207,6 @@ export function PoseNet3DVisualization({ poseData, showControls = true }) {
     ) {
       try {
         containerRef.current.removeChild(rendererRef.current.domElement);
-        logDebug("Removed renderer from DOM");
       } catch (e) {
         logDebug("Error removing renderer from DOM:", e.message);
       }
@@ -205,30 +216,25 @@ export function PoseNet3DVisualization({ poseData, showControls = true }) {
     if (rendererRef.current) {
       rendererRef.current.dispose();
       rendererRef.current = null;
-      logDebug("Disposed renderer");
     }
 
     // Clear controls
     if (controlsRef.current) {
       controlsRef.current.dispose();
       controlsRef.current = null;
-      logDebug("Disposed controls");
     }
 
     setIsInitialized(false);
     setVisibleKeypoints(0);
     setVisibleBones(0);
-  };
+  }, [logDebug]);
 
   // Initialize Three.js scene
-  const initializeScene = () => {
+  const initializeScene = useCallback(() => {
     if (!containerRef.current) {
       logDebug("Cannot initialize scene: container ref is null");
       return;
     }
-
-    logDebug("Initializing Three.js scene");
-    setSceneError(null);
 
     // Check WebGL before proceeding
     if (!checkWebGLCapabilities()) {
@@ -242,93 +248,79 @@ export function PoseNet3DVisualization({ poseData, showControls = true }) {
       // Calculate dimensions
       const width = containerRef.current.clientWidth;
       const height = 500;
-      logDebug(`Container dimensions: ${width}x${height}`);
 
       // Create scene
       const scene = new THREE.Scene();
       scene.background = new THREE.Color(0xf0f0f0);
       sceneRef.current = scene;
-      logDebug("Created THREE.Scene");
 
       // Create camera
       const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
       camera.position.set(0, 1, 5);
       cameraRef.current = camera;
-      logDebug("Created PerspectiveCamera");
 
-      // Create renderer
+      // Create renderer with optimized settings
       const renderer = new THREE.WebGLRenderer({
         antialias: true,
-        powerPreference: "high-performance",
+        powerPreference: "default", // Use 'default' instead of 'high-performance'
+        precision: "mediump", // Use medium precision to save resources
       });
       renderer.setSize(width, height);
-      renderer.setPixelRatio(window.devicePixelRatio);
-      renderer.shadowMap.enabled = true;
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // Limit pixel ratio
+      renderer.shadowMap.enabled = false; // Disable shadows for better performance
 
       // Check if container already has a canvas
       const existingCanvas = containerRef.current.querySelector("canvas");
       if (existingCanvas) {
-        logDebug(
-          "WARNING: Container already has a canvas element, removing it"
-        );
         containerRef.current.removeChild(existingCanvas);
       }
 
       containerRef.current.appendChild(renderer.domElement);
       rendererRef.current = renderer;
-      logDebug("Created WebGLRenderer and added to DOM");
 
-      // Set up controls
+      // Set up controls with optimized settings
       const controls = new OrbitControls(camera, renderer.domElement);
       controls.enableDamping = true;
-      controls.dampingFactor = 0.05;
+      controls.dampingFactor = 0.1;
       controls.autoRotate = isRotating;
-      controls.autoRotateSpeed = 2.0;
+      controls.autoRotateSpeed = 1.0; // Reduce rotation speed
+      controls.enableZoom = true;
+      controls.enablePan = true;
       controlsRef.current = controls;
-      logDebug("Created OrbitControls");
 
       // Add a grid helper
-      const gridHelper = new THREE.GridHelper(10, 20, 0x555555, 0xcccccc);
+      const gridHelper = new THREE.GridHelper(10, 10, 0x555555, 0xcccccc); // Reduced grid division
       scene.add(gridHelper);
-      logDebug("Added GridHelper");
 
       // Add lights
-      const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
       scene.add(ambientLight);
 
-      const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+      // Single directional light is sufficient
+      const directionalLight = new THREE.DirectionalLight(0xffffff, 0.7);
       directionalLight.position.set(5, 5, 5);
-      directionalLight.castShadow = true;
-      directionalLight.shadow.mapSize.width = 1024;
-      directionalLight.shadow.mapSize.height = 1024;
+      directionalLight.castShadow = false; // Disable shadow casting
       scene.add(directionalLight);
-      logDebug("Added lights");
 
-      // Create keypoint meshes
+      // Create keypoint meshes with simplified geometry
       Object.keys(KEYPOINT_COLORS).forEach((keypoint) => {
-        const geometry = new THREE.SphereGeometry(0.05, 16, 16);
-        const material = new THREE.MeshStandardMaterial({
+        // Use lower poly spheres
+        const geometry = new THREE.SphereGeometry(0.05, 8, 8); // Reduced segments
+        const material = new THREE.MeshBasicMaterial({
+          // Use MeshBasicMaterial instead of MeshStandardMaterial
           color: KEYPOINT_COLORS[keypoint],
-          metalness: 0.3,
-          roughness: 0.7,
         });
 
         const mesh = new THREE.Mesh(geometry, material);
         mesh.visible = false; // Initially hidden
-        mesh.castShadow = true;
-        mesh.receiveShadow = true;
         scene.add(mesh);
         keypointMeshesRef.current[keypoint] = mesh;
-      });
-      logDebug("Created keypoint meshes", {
-        count: Object.keys(KEYPOINT_COLORS).length,
       });
 
       // Create bone connections
       SKELETON_CONNECTIONS.forEach(([start, end]) => {
         const material = new THREE.LineBasicMaterial({
           color: 0x0088ff,
-          linewidth: 2,
         });
 
         const geometry = new THREE.BufferGeometry();
@@ -342,13 +334,29 @@ export function PoseNet3DVisualization({ poseData, showControls = true }) {
           end,
         });
       });
-      logDebug("Created bone connections", {
-        count: SKELETON_CONNECTIONS.length,
-      });
 
-      // Setup animation loop
-      const animate = () => {
+      // Setup animation loop with frame rate limiting
+      let lastTime = 0;
+      const animate = (time) => {
         animationFrameRef.current = requestAnimationFrame(animate);
+
+        // Calculate frame rate
+        if (time - lastFrameTimeRef.current >= 1000) {
+          // Update FPS every second
+          setFps(frameCountRef.current);
+          frameCountRef.current = 0;
+          lastFrameTimeRef.current = time;
+        } else {
+          frameCountRef.current++;
+        }
+
+        // Frame rate limiting (60 FPS max)
+        const elapsed = time - lastTime;
+        if (elapsed < 16.7) {
+          // ~60 FPS
+          return;
+        }
+        lastTime = time;
 
         if (controlsRef.current) {
           controlsRef.current.update();
@@ -359,46 +367,60 @@ export function PoseNet3DVisualization({ poseData, showControls = true }) {
         }
       };
 
-      animate();
-      logDebug("Started animation loop");
-
-      // Add event listeners to debug OrbitControls
-      renderer.domElement.addEventListener("mousedown", () => {
-        logDebug("Canvas mousedown event");
-      });
-
-      renderer.domElement.addEventListener("mousemove", () => {
-        if (!controlsRef.current) return;
-        // Only log occasionally to avoid flooding
-        if (Math.random() < 0.01) {
-          logDebug("Canvas mousemove, camera position:", {
-            x: cameraRef.current.position.x.toFixed(2),
-            y: cameraRef.current.position.y.toFixed(2),
-            z: cameraRef.current.position.z.toFixed(2),
-          });
-        }
-      });
-
-      setIsInitialized(true);
+      animate(0);
       logDebug("Scene initialization complete");
+      setIsInitialized(true);
     } catch (error) {
       const errorMsg = `Error initializing scene: ${error.message}`;
       logDebug(errorMsg);
       setSceneError(errorMsg);
     }
-  };
+  }, [checkWebGLCapabilities, cleanup, isRotating, logDebug]);
+
+  // Handle WebGL context loss
+  useEffect(() => {
+    if (!rendererRef.current || !rendererRef.current.domElement) return;
+
+    const handleContextLost = (event) => {
+      event.preventDefault();
+      logDebug("WebGL context lost");
+
+      // Force re-initialization
+      setTimeout(() => {
+        cleanup();
+        setTimeout(() => {
+          initializeScene();
+          if (poseData && poseData.length > 0) {
+            updatePoseFrame(currentFrame);
+          }
+        }, 100);
+      }, 100);
+    };
+
+    rendererRef.current.domElement.addEventListener(
+      "webglcontextlost",
+      handleContextLost
+    );
+
+    return () => {
+      if (rendererRef.current && rendererRef.current.domElement) {
+        rendererRef.current.domElement.removeEventListener(
+          "webglcontextlost",
+          handleContextLost
+        );
+      }
+    };
+  }, [cleanup, currentFrame, initializeScene, logDebug, poseData]);
 
   // Attach resize handler
   useEffect(() => {
     const handleResize = () => {
       if (!containerRef.current || !rendererRef.current || !cameraRef.current) {
-        logDebug("Cannot handle resize: missing refs");
         return;
       }
 
       const width = containerRef.current.clientWidth;
       const height = 500;
-      logDebug(`Window resize: ${width}x${height}`);
 
       cameraRef.current.aspect = width / height;
       cameraRef.current.updateProjectionMatrix();
@@ -407,84 +429,48 @@ export function PoseNet3DVisualization({ poseData, showControls = true }) {
     };
 
     window.addEventListener("resize", handleResize);
-    logDebug("Added window resize listener");
 
     return () => {
       window.removeEventListener("resize", handleResize);
-      logDebug("Removed window resize listener");
     };
   }, []);
 
+  // Handle beforeunload event
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      // Force cleanup before page unload
+      cleanup();
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+  }, [cleanup]);
+
   // Initialize scene when component mounts
   useEffect(() => {
-    logDebug("Component mounted");
     initializeScene();
 
     // Cleanup when component unmounts
-    return () => {
-      logDebug("Component unmounting");
-      cleanup();
-    };
-  }, []); // Empty dependency array - only run once on mount
+    return cleanup;
+  }, [cleanup, initializeScene]);
 
   // Update rotation state when isRotating changes
   useEffect(() => {
     if (controlsRef.current) {
       controlsRef.current.autoRotate = isRotating;
-      logDebug(`Set autoRotate to ${isRotating}`);
     }
   }, [isRotating]);
 
   // Effect for initial data display and when poseData changes
   useEffect(() => {
-    logDebug("poseData or initialization changed", {
-      hasPoseData: !!poseData,
-      poseDataLength: poseData?.length || 0,
-      isInitialized: isInitialized,
-    });
-
     if (poseData && poseData.length > 0 && isInitialized) {
-      logDebug(`Visualization received ${poseData.length} frames of pose data`);
-
-      // Check if we can extract keypoints from the first frame
-      const firstFrame = poseData[0];
-      logDebug("First frame raw data:", firstFrame);
-
-      const keypoints = extractKeypoints(firstFrame);
-
-      // Debug output to check data format
-      logDebug("First frame data keys:", Object.keys(firstFrame).slice(0, 10));
-      logDebug("Extracted keypoints:", Object.keys(keypoints));
-
-      if (Object.keys(keypoints).length > 0) {
-        const firstKeypointName = Object.keys(keypoints)[0];
-        logDebug(
-          `Keypoint example (${firstKeypointName}):`,
-          keypoints[firstKeypointName]
-        );
-      } else {
-        logDebug("WARNING: No keypoints extracted from frame data");
-      }
-
-      // Keypoint name mapping check
-      const expectedKeypoints = Object.keys(KEYPOINT_COLORS);
-      const foundKeypoints = Object.keys(keypoints);
-      const missingKeypoints = expectedKeypoints.filter(
-        (k) => !foundKeypoints.includes(k)
-      );
-
-      logDebug("Expected keypoints:", expectedKeypoints);
-      logDebug("Found keypoints:", foundKeypoints);
-
-      if (missingKeypoints.length > 0) {
-        logDebug("Missing keypoints:", missingKeypoints);
-      }
-
-      // Continue with rendering
+      logDebug(`Received ${poseData.length} frames of pose data`);
       setCurrentFrame(0);
       updatePoseFrame(0);
     }
-  }, [poseData, isInitialized]);
+  }, [poseData, isInitialized, logDebug]);
 
   // Animation playback control
   useEffect(() => {
@@ -512,202 +498,174 @@ export function PoseNet3DVisualization({ poseData, showControls = true }) {
         clearInterval(timerRef.current);
       }
     };
-  }, [isPlaying, poseData, playbackSpeed]);
+  }, [isPlaying, logDebug, playbackSpeed, poseData]);
 
-  // Extract keypoints from frame data
-  const extractKeypoints = (frameData) => {
-    if (!frameData) {
-      logDebug("extractKeypoints: No frame data provided");
-      return {};
-    }
+  // Extract keypoints from frame data - memoized
+  const extractKeypoints = useCallback(
+    (frameData) => {
+      if (!frameData) return {};
 
-    const keypoints = {};
+      const keypoints = {};
 
-    try {
-      Object.keys(frameData).forEach((key) => {
-        // Skip non-coordinate keys
-        if (key === "FrameNo" || !key.includes("_")) return;
+      try {
+        Object.keys(frameData).forEach((key) => {
+          // Skip non-coordinate keys
+          if (key === "FrameNo" || !key.includes("_")) return;
 
-        // Extract keypoint and coordinate
-        const parts = key.split("_");
-        let keypoint, coord;
+          // Extract keypoint and coordinate
+          const parts = key.split("_");
+          let keypoint, coord;
 
-        if (parts.length === 2) {
-          [keypoint, coord] = parts;
-        } else if (parts.length > 2) {
-          coord = parts.pop();
-          keypoint = parts.join("_");
-        } else {
-          return;
-        }
+          if (parts.length === 2) {
+            [keypoint, coord] = parts;
+          } else if (parts.length > 2) {
+            coord = parts.pop();
+            keypoint = parts.join("_");
+          } else {
+            return;
+          }
 
-        // Create keypoint object if needed
-        if (!keypoints[keypoint]) {
-          keypoints[keypoint] = {};
-        }
+          // Create keypoint object if needed
+          if (!keypoints[keypoint]) {
+            keypoints[keypoint] = {};
+          }
 
-        // Store coordinate value
-        const value = frameData[key];
-        keypoints[keypoint][coord] =
-          typeof value === "string" ? parseFloat(value) : value;
-      });
-    } catch (error) {
-      logDebug("Error extracting keypoints:", error.message);
-    }
+          // Store coordinate value
+          const value = frameData[key];
+          keypoints[keypoint][coord] =
+            typeof value === "string" ? parseFloat(value) : value;
+        });
+      } catch (error) {
+        logDebug("Error extracting keypoints:", error.message);
+      }
 
-    return keypoints;
-  };
+      return keypoints;
+    },
+    [logDebug]
+  );
 
   // Update pose visualization for a specific frame
-  const updatePoseFrame = (frameIndex) => {
-    if (!poseData || poseData.length === 0) {
-      logDebug("updatePoseFrame: No pose data available");
-      return;
-    }
-
-    if (!sceneRef.current) {
-      logDebug("updatePoseFrame: No scene available");
-      return;
-    }
-
-    if (!isInitialized) {
-      logDebug("updatePoseFrame: Scene not initialized");
-      return;
-    }
-
-    try {
-      const frameData = poseData[frameIndex];
-      const keypoints = extractKeypoints(frameData);
-
-      // Debug log for first frame
-      if (frameIndex === 0) {
-        logDebug("First frame keypoints:", keypoints);
-
-        // Add detailed diagnostic information
-        const xKeys = Object.keys(frameData).filter((k) => k.endsWith("_x"));
-        const yKeys = Object.keys(frameData).filter((k) => k.endsWith("_y"));
-        const zKeys = Object.keys(frameData).filter((k) => k.endsWith("_z"));
-
-        logDebug("X coordinate keys:", xKeys);
-        logDebug("Y coordinate keys:", yKeys);
-        logDebug("Z coordinate keys:", zKeys);
+  const updatePoseFrame = useCallback(
+    (frameIndex) => {
+      if (
+        !poseData ||
+        poseData.length === 0 ||
+        !sceneRef.current ||
+        !isInitialized
+      ) {
+        return;
       }
 
-      // Scale factor for better visualization
-      const scaleFactor = 1.0;
+      try {
+        const frameData = poseData[frameIndex];
+        const keypoints = extractKeypoints(frameData);
 
-      let visiblePoints = 0;
-      let visibleLines = 0;
+        // Scale factor for better visualization
+        const scaleFactor = 1.0;
 
-      // Update keypoint positions
-      Object.entries(keypointMeshesRef.current).forEach(([name, mesh]) => {
-        const position = keypoints[name];
+        let visiblePoints = 0;
+        let visibleLines = 0;
 
-        if (!mesh || !position) {
-          if (mesh) mesh.visible = false;
-          return;
-        }
+        // Update keypoint positions
+        Object.entries(keypointMeshesRef.current).forEach(([name, mesh]) => {
+          const position = keypoints[name];
 
-        if (
-          position.x !== undefined &&
-          position.y !== undefined &&
-          position.z !== undefined
-        ) {
-          mesh.position.x = position.x * scaleFactor;
-          mesh.position.y = position.y * scaleFactor;
-          mesh.position.z = position.z * scaleFactor;
-          mesh.visible = true;
-          visiblePoints++;
-        } else {
-          mesh.visible = false;
-          if (frameIndex === 0) {
-            logDebug(`Missing coordinate for keypoint ${name}:`, position);
+          if (!mesh || !position) {
+            if (mesh) mesh.visible = false;
+            return;
           }
-        }
-      });
 
-      // Update bones
-      bonesRef.current.forEach(({ line, start, end }) => {
-        const startPoint = keypoints[start];
-        const endPoint = keypoints[end];
-
-        if (
-          !line ||
-          !startPoint ||
-          !endPoint ||
-          startPoint.x === undefined ||
-          startPoint.y === undefined ||
-          startPoint.z === undefined ||
-          endPoint.x === undefined ||
-          endPoint.y === undefined ||
-          endPoint.z === undefined
-        ) {
-          if (line) line.visible = false;
-          if (frameIndex === 0) {
-            logDebug(
-              `Cannot draw line from ${start} to ${end}: missing coordinates`
-            );
+          if (
+            position.x !== undefined &&
+            position.y !== undefined &&
+            position.z !== undefined
+          ) {
+            mesh.position.x = position.x * scaleFactor;
+            mesh.position.y = position.y * scaleFactor;
+            mesh.position.z = position.z * scaleFactor;
+            mesh.visible = true;
+            visiblePoints++;
+          } else {
+            mesh.visible = false;
           }
-          return;
-        }
+        });
 
-        const points = [
-          new THREE.Vector3(
-            startPoint.x * scaleFactor,
-            startPoint.y * scaleFactor,
-            startPoint.z * scaleFactor
-          ),
-          new THREE.Vector3(
-            endPoint.x * scaleFactor,
-            endPoint.y * scaleFactor,
-            endPoint.z * scaleFactor
-          ),
-        ];
+        // Update bones
+        bonesRef.current.forEach(({ line, start, end }) => {
+          const startPoint = keypoints[start];
+          const endPoint = keypoints[end];
 
-        // Update line geometry
-        if (line.geometry) line.geometry.dispose();
-        line.geometry = new THREE.BufferGeometry().setFromPoints(points);
-        line.visible = true;
-        visibleLines++;
-      });
+          if (
+            !line ||
+            !startPoint ||
+            !endPoint ||
+            startPoint.x === undefined ||
+            startPoint.y === undefined ||
+            startPoint.z === undefined ||
+            endPoint.x === undefined ||
+            endPoint.y === undefined ||
+            endPoint.z === undefined
+          ) {
+            if (line) line.visible = false;
+            return;
+          }
 
-      // Update state for debug display
-      setVisibleKeypoints(visiblePoints);
-      setVisibleBones(visibleLines);
+          const points = [
+            new THREE.Vector3(
+              startPoint.x * scaleFactor,
+              startPoint.y * scaleFactor,
+              startPoint.z * scaleFactor
+            ),
+            new THREE.Vector3(
+              endPoint.x * scaleFactor,
+              endPoint.y * scaleFactor,
+              endPoint.z * scaleFactor
+            ),
+          ];
 
-      if (frameIndex === 0) {
-        logDebug(
-          `Visible elements: ${visiblePoints} keypoints, ${visibleLines} bones`
-        );
+          // Update line geometry
+          if (line.geometry) line.geometry.dispose();
+          line.geometry = new THREE.BufferGeometry().setFromPoints(points);
+          line.visible = true;
+          visibleLines++;
+        });
+
+        // Update state for debug display
+        setVisibleKeypoints(visiblePoints);
+        setVisibleBones(visibleLines);
+      } catch (error) {
+        logDebug(`Error updating pose frame ${frameIndex}:`, error.message);
       }
-    } catch (error) {
-      logDebug(`Error updating pose frame ${frameIndex}:`, error.message);
-    }
-  };
+    },
+    [extractKeypoints, isInitialized, logDebug, poseData]
+  );
 
   // Event handlers for UI controls
-  const handlePlayPause = () => {
-    setIsPlaying(!isPlaying);
-  };
+  const handlePlayPause = useCallback(() => {
+    setIsPlaying((prev) => !prev);
+  }, []);
 
-  const handleReset = () => {
+  const handleReset = useCallback(() => {
     setIsPlaying(false);
     setCurrentFrame(0);
     updatePoseFrame(0);
-  };
+  }, [updatePoseFrame]);
 
-  const handleRotationToggle = () => {
-    setIsRotating(!isRotating);
-  };
+  const handleRotationToggle = useCallback(() => {
+    setIsRotating((prev) => !prev);
+  }, []);
 
-  const handleFrameChange = (value) => {
-    const frameIndex = value[0] || 0;
-    setCurrentFrame(frameIndex);
-    updatePoseFrame(frameIndex);
-  };
+  const handleFrameChange = useCallback(
+    (value) => {
+      const frameIndex = value[0] || 0;
+      setCurrentFrame(frameIndex);
+      updatePoseFrame(frameIndex);
+    },
+    [updatePoseFrame]
+  );
 
   // Handle force re-initialize
-  const handleForceInit = () => {
+  const handleForceInit = useCallback(() => {
     logDebug("Force re-initializing scene");
     cleanup();
     setTimeout(() => {
@@ -718,26 +676,29 @@ export function PoseNet3DVisualization({ poseData, showControls = true }) {
         }, 100);
       }
     }, 100);
-  };
+  }, [cleanup, initializeScene, logDebug, poseData, updatePoseFrame]);
 
   // Speed control function
-  const setSpeed = (speed) => {
-    setPlaybackSpeed(speed);
-    // If already playing, restart the animation to apply new speed
-    if (isPlaying) {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-      }
+  const setSpeed = useCallback(
+    (speed) => {
+      setPlaybackSpeed(speed);
+      // If already playing, restart the animation to apply new speed
+      if (isPlaying) {
+        if (timerRef.current) {
+          clearInterval(timerRef.current);
+        }
 
-      timerRef.current = setInterval(() => {
-        setCurrentFrame((prev) => {
-          const next = (prev + 1) % poseData.length;
-          updatePoseFrame(next);
-          return next;
-        });
-      }, speed);
-    }
-  };
+        timerRef.current = setInterval(() => {
+          setCurrentFrame((prev) => {
+            const next = (prev + 1) % poseData.length;
+            updatePoseFrame(next);
+            return next;
+          });
+        }, speed);
+      }
+    },
+    [isPlaying, poseData, updatePoseFrame]
+  );
 
   return (
     <Card className="w-full shadow-lg">
@@ -757,6 +718,11 @@ export function PoseNet3DVisualization({ poseData, showControls = true }) {
             <Badge variant="outline" className="bg-blue-50 text-blue-700">
               Frame {currentFrame + 1} of {poseData?.length || 0}
             </Badge>
+            {fps > 0 && (
+              <Badge variant="outline" className="bg-green-50 text-green-700">
+                {fps} FPS
+              </Badge>
+            )}
             <Button
               variant="outline"
               size="sm"
@@ -820,6 +786,9 @@ export function PoseNet3DVisualization({ poseData, showControls = true }) {
                 <p>
                   <strong>Visible Bones:</strong> {visibleBones}/
                   {SKELETON_CONNECTIONS.length}
+                </p>
+                <p>
+                  <strong>FPS:</strong> {fps}
                 </p>
               </div>
 

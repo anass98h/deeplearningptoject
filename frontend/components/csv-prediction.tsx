@@ -24,7 +24,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 
 // Import the PoseNet3DVisualization component
 import { PoseNet3DVisualization } from "./PoseNet3DVisualization";
@@ -247,12 +247,12 @@ export function CSVPrediction() {
   return (
     <div className="space-y-8">
       <Card className="shadow-lg border-blue-100">
-        <CardHeader className="pb-3 bg-gradient-to-r from-blue-50 to-cyan-50">
+        {/* <CardHeader className="pb-3 bg-gradient-to-r from-blue-50 to-cyan-50">
           <CardTitle className="flex items-center text-xl text-blue-800">
             <Box className="h-5 w-5 mr-2 text-blue-600" />
             PoseNet 3D Analysis
           </CardTitle>
-        </CardHeader>
+        </CardHeader> */}
 
         <CardContent className="pt-6">
           <Tabs
