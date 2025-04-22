@@ -6,10 +6,10 @@ import {
   Upload,
   FileUp,
   AlertCircle,
-  Box,
   Eye,
   Database,
   FileType,
+  SplitSquareVertical,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -25,6 +25,13 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent } from "@/components/ui/card";
+import { Switch } from "@/components/ui/switch";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 // Import the PoseNet3DVisualization component
 import { PoseNet3DVisualization } from "./PoseNet3DVisualization";
@@ -49,7 +56,9 @@ export function CSVPrediction() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // 3D visualization state
-  const [poseData, setPoseData] = useState<any[]>([]);
+  const [groundTruthData, setGroundTruthData] = useState<any[]>([]);
+  const [predictedData, setPredictedData] = useState<any[]>([]);
+  const [showSideBySide, setShowSideBySide] = useState(false);
   const [activeTab, setActiveTab] = useState("data");
   const [dataKey, setDataKey] = useState(0); // Used to force re-render of visualization
 
@@ -86,7 +95,11 @@ export function CSVPrediction() {
 
         // Process the file with our existing CSV processor
         setFile(csvFile);
-        await processCSV(csvFile);
+        const processedData = await processCSVData(csvFile);
+        if (processedData) {
+          // When loading from server, set this as ground truth data
+          setGroundTruthData(processedData);
+        }
 
         console.log("Successfully processed CSV data");
       } else {
@@ -149,7 +162,57 @@ export function CSVPrediction() {
     }
   }, []);
 
-  const processCSV = useCallback(async (file: File) => {
+  // Process CSV data without updating state (used for ground truth data)
+  const processCSVData = async (file: File): Promise<any[] | null> => {
+    try {
+      const text = await file.text();
+      const lines = text.split("\n");
+
+      if (lines.length === 0) {
+        throw new Error("CSV file is empty");
+      }
+
+      // Try to detect delimiter (tab or comma)
+      const firstLine = lines[0];
+      const delimiter = firstLine.includes("\t") ? "\t" : ",";
+
+      // Parse headers, making sure to handle spaces after the delimiter
+      const headers = firstLine.split(delimiter).map((header) => header.trim());
+
+      // Process rows
+      const rows: any[][] = [];
+      for (let i = 1; i < lines.length; i++) {
+        if (lines[i].trim() === "") continue;
+
+        // Split by the detected delimiter
+        const values = lines[i].split(delimiter).map((value) => {
+          const trimmed = value.trim();
+          return isNaN(Number(trimmed)) ? trimmed : Number(trimmed);
+        });
+
+        if (values.length === headers.length) {
+          rows.push(values);
+        }
+      }
+
+      // Convert to format for 3D visualization - object with properties for each column
+      const objectRows = rows.map((row) => {
+        const obj: Record<string, any> = {}; // Explicitly type the object
+        headers.forEach((header, index) => {
+          obj[header] = row[index];
+        });
+        return obj;
+      });
+
+      return objectRows;
+    } catch (err) {
+      console.error("Error processing CSV data:", err);
+      return null;
+    }
+  };
+
+  // Process CSV and update UI state
+  const processCSV = async (file: File) => {
     setLoading(true);
     setError(null);
     setProgress(0);
@@ -227,14 +290,15 @@ export function CSVPrediction() {
         console.log("Sample object row:", objectRows[0]);
       }
 
-      // Clear any previous data first
-      setPoseData([]);
+      // Set as predicted data
+      setPredictedData(objectRows);
 
-      // Use setTimeout to ensure the component has time to reset
-      setTimeout(() => {
-        setPoseData(objectRows);
-        setDataKey((prev) => prev + 1); // Force re-render of the visualization
-      }, 100);
+      // If we have both ground truth and prediction, enable side-by-side by default
+      if (groundTruthData.length > 0) {
+        setShowSideBySide(true);
+      }
+
+      setDataKey((prev) => prev + 1); // Force re-render of the visualization
     } catch (err) {
       console.error("Error processing CSV:", err);
       setError("Failed to process CSV file. Please check the format.");
@@ -243,18 +307,11 @@ export function CSVPrediction() {
       setProgress(100);
       setLoading(false);
     }
-  }, []);
+  };
 
   return (
     <div className="space-y-8">
       <Card className="shadow-lg border-blue-100">
-        {/* <CardHeader className="pb-3 bg-gradient-to-r from-blue-50 to-cyan-50">
-          <CardTitle className="flex items-center text-xl text-blue-800">
-            <Box className="h-5 w-5 mr-2 text-blue-600" />
-            PoseNet 3D Analysis
-          </CardTitle>
-        </CardHeader> */}
-
         <CardContent className="pt-6">
           <Tabs
             value={activeTab}
@@ -269,16 +326,17 @@ export function CSVPrediction() {
               <TabsTrigger
                 value="visualization"
                 className="flex items-center"
-                disabled={!poseData || poseData.length === 0}
+                disabled={!groundTruthData.length && !predictedData.length}
               >
                 <Eye className="h-4 w-4 mr-2" />
                 3D View
-                {poseData && poseData.length > 0 && (
+                {(groundTruthData.length > 0 || predictedData.length > 0) && (
                   <Badge
                     variant="outline"
                     className="ml-2 bg-green-50 border-green-200"
                   >
-                    {poseData.length} Frames
+                    {Math.max(groundTruthData.length, predictedData.length)}{" "}
+                    Frames
                   </Badge>
                 )}
               </TabsTrigger>
@@ -368,6 +426,76 @@ export function CSVPrediction() {
                 </div>
               )}
 
+              {/* Data Status */}
+              {(groundTruthData.length > 0 || predictedData.length > 0) && (
+                <div className="mt-6 p-4 bg-blue-50 rounded-lg border border-blue-100">
+                  <h3 className="text-lg font-medium text-blue-800 mb-2">
+                    Visualization Data Status
+                  </h3>
+                  <div className="flex flex-col space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium text-gray-700">
+                        Ground Truth Data (Server)
+                      </span>
+                      <Badge
+                        variant={groundTruthData.length ? "default" : "outline"}
+                        className={
+                          groundTruthData.length
+                            ? "bg-green-500"
+                            : "bg-gray-200 text-gray-700"
+                        }
+                      >
+                        {groundTruthData.length
+                          ? `${groundTruthData.length} frames`
+                          : "No data"}
+                      </Badge>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium text-gray-700">
+                        Prediction Data (CSV Upload)
+                      </span>
+                      <Badge
+                        variant={predictedData.length ? "default" : "outline"}
+                        className={
+                          predictedData.length
+                            ? "bg-green-500"
+                            : "bg-gray-200 text-gray-700"
+                        }
+                      >
+                        {predictedData.length
+                          ? `${predictedData.length} frames`
+                          : "No data"}
+                      </Badge>
+                    </div>
+
+                    {groundTruthData.length > 0 && predictedData.length > 0 && (
+                      <div className="flex items-center justify-between mt-2 pt-2 border-t border-blue-200">
+                        <div className="flex items-center gap-2">
+                          <SplitSquareVertical className="h-4 w-4 text-blue-700" />
+                          <span className="text-sm font-medium text-gray-700">
+                            Side-by-Side View
+                          </span>
+                        </div>
+                        <Switch
+                          checked={showSideBySide}
+                          onCheckedChange={setShowSideBySide}
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="mt-4">
+                    <Button
+                      onClick={() => setActiveTab("visualization")}
+                      className="bg-gradient-to-r from-indigo-500 to-blue-500 hover:from-indigo-600 hover:to-blue-600 text-white shadow-md w-full"
+                    >
+                      <Eye className="mr-2 h-4 w-4" />
+                      View 3D Visualization
+                    </Button>
+                  </div>
+                </div>
+              )}
+
               {/* Data table */}
               {csvData && csvData.rows.length > 0 && (
                 <div className="mt-6">
@@ -380,15 +508,6 @@ export function CSVPrediction() {
                         </Badge>
                       )}
                     </h3>
-
-                    <Button
-                      onClick={() => setActiveTab("visualization")}
-                      className="bg-gradient-to-r from-indigo-500 to-blue-500 hover:from-indigo-600 hover:to-blue-600 text-white shadow-md"
-                      disabled={!poseData || poseData.length === 0}
-                    >
-                      <Box className="mr-2 h-4 w-4" />
-                      View 3D Visualization
-                    </Button>
                   </div>
 
                   <div className="border rounded-lg overflow-auto shadow-md bg-white">
@@ -451,11 +570,59 @@ export function CSVPrediction() {
             </TabsContent>
 
             <TabsContent value="visualization" className="pt-4">
-              {poseData && poseData.length > 0 ? (
-                <div key={dataKey}>
-                  {" "}
-                  {/* Force re-render with key */}
-                  <PoseNet3DVisualization poseData={poseData} />
+              {groundTruthData.length > 0 || predictedData.length > 0 ? (
+                <div className="space-y-4" key={dataKey}>
+                  {groundTruthData.length > 0 && predictedData.length > 0 && (
+                    <div className="flex items-center justify-end gap-2 mb-2">
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium text-gray-700">
+                                Side-by-Side View
+                              </span>
+                              <Switch
+                                checked={showSideBySide}
+                                onCheckedChange={setShowSideBySide}
+                              />
+                            </div>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p>Compare ground truth vs prediction</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    </div>
+                  )}
+
+                  {/* The visualization component with side-by-side capability */}
+                  {groundTruthData.length > 0 &&
+                  predictedData.length > 0 &&
+                  showSideBySide ? (
+                    <PoseNet3DVisualization
+                      poseData={groundTruthData}
+                      predictedData={predictedData}
+                      showSideBySide={true}
+                      groundTruthLabel="Ground Truth (Server)"
+                      predictedLabel="Prediction (CSV)"
+                    />
+                  ) : groundTruthData.length > 0 ? (
+                    <PoseNet3DVisualization
+                      poseData={groundTruthData}
+                      predictedData={[]}
+                      showSideBySide={false}
+                      groundTruthLabel="Ground Truth (Server)"
+                      predictedLabel=""
+                    />
+                  ) : (
+                    <PoseNet3DVisualization
+                      poseData={predictedData}
+                      predictedData={[]}
+                      showSideBySide={false}
+                      groundTruthLabel="Prediction (CSV)"
+                      predictedLabel=""
+                    />
+                  )}
                 </div>
               ) : (
                 <div className="p-12 text-center bg-gray-50 rounded-lg border border-gray-200">
