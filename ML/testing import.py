@@ -1,5 +1,3 @@
-import sklearn, scikeras, keras, tensorflow
-print("sklearn", sklearn.__version__)
-print("scikeras", scikeras.__version__)
-print("keras", keras.__version__)
-print("tensorflow", tensorflow.__version__)
+import sys
+sys.path.append('/full/path/to/site-packages')  # before importing tqdm
+import tqdm_joblib

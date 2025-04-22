@@ -83,9 +83,8 @@ from sklearn.model_selection import train_test_split, GridSearchCV, ParameterGri
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import make_scorer, mean_squared_error
 from joblib import dump
-from tqdm_joblib import tqdm_joblib # external helper<br>
-from tqdm.auto import tqdm
 import warnings, os
+
 
 warnings.filterwarnings("ignore", category=UserWarning)
 tf.random.set_seed(42)
@@ -108,10 +107,10 @@ PATIENCE   = 10             # EarlyStopping patience
 MAX_EPOCHS = 200            # hard cap; EarlyStopping usually ends sooner
 
 param_grid = {
-    "units":        [32, 64, 128],
-    "n_hidden":     [2, 3 ,4],
-    "batch_size":   [128, 256, 512],
-    "learning_rate":[0.001, 0.0005],
+    "model__units":        [128],
+    "model__n_hidden":     [4],
+    "batch_size":   [128],
+    "model__learning_rate":[0.001],
 }
 
 # ------------------------------------------------------------------ #
@@ -158,25 +157,21 @@ grid = GridSearchCV(
     param_grid=param_grid,
     scoring=neg_mse,
     cv=3,
-    n_jobs=1,
+    n_jobs=-1,
     refit=True,
-    verbose=0,                 # we’ll drive output via tqdm instead
+    verbose=2,                 # we’ll drive output via tqdm instead
 )
 
 # ------------------------------------------------------------------ #
 # 5.  Run Grid‑search with progress‑bar                              #
 # ------------------------------------------------------------------ #
-n_configs   = len(ParameterGrid(param_grid))
-n_cv_tasks  = n_configs * grid.cv
-print(f"⏳  Running GridSearchCV: {n_configs} configs × {grid.cv}‑fold CV = {n_cv_tasks} fits\n")
 
-with tqdm_joblib(tqdm(total=n_cv_tasks, desc="grid progress", unit="fit")):
-    grid_result = grid.fit(
-        X_train, y_train,
-        validation_split=0.1,
-        callbacks=[early_stop],
-    )
-
+print(f"⏳  Running GridSearchCV with {len(ParameterGrid(param_grid))} configs × {grid.cv}‑fold CV\n")
+grid_result = grid.fit(
+    X_train, y_train,
+    validation_split=0.1,
+    callbacks=[early_stop],
+)
 # ------------------------------------------------------------------ #
 # 6.  Report best parameters                                         #
 # ------------------------------------------------------------------ #
@@ -185,7 +180,7 @@ for k, v in grid_result.best_params_.items():
     print(f"   • {k:12s}: {v}")
 print("Best CV MSE :", -grid_result.best_score_)
 
-best_model = grid_result.best_estimator_.model   # Keras model object
+best_model = grid_result.best_estimator_.model_   # Keras model object
 
 # ------------------------------------------------------------------ #
 # 7.  Evaluate on held‑out test set                                  #
@@ -197,7 +192,7 @@ print("📊 Test MAE :", test_mae)
 # ------------------------------------------------------------------ #
 # 8.  Save artefacts                                                 #
 # ------------------------------------------------------------------ #
-best_model.save("xy_to_xy_best")     # v3 format
+best_model.save("xy_to_xy_best.keras")     # v3 format
 dump(grid_result.best_params_, "best_params.pkl")
 
 if X_scaler is not None:
