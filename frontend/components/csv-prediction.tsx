@@ -9,7 +9,6 @@ import {
   Eye,
   Database,
   FileType,
-  SplitSquareVertical,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -25,7 +24,6 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent } from "@/components/ui/card";
-import { Switch } from "@/components/ui/switch";
 import {
   Tooltip,
   TooltipContent,
@@ -35,6 +33,7 @@ import {
 
 // Import the PoseNet3DVisualization component
 import { PoseNet3DVisualization } from "./PoseNet3DVisualization";
+import { Switch } from "./ui/switch";
 
 interface CSVData {
   headers: string[];
@@ -435,7 +434,7 @@ export function CSVPrediction() {
                   <div className="flex flex-col space-y-2">
                     <div className="flex items-center justify-between">
                       <span className="text-sm font-medium text-gray-700">
-                        Ground Truth Data (Server)
+                        True Data
                       </span>
                       <Badge
                         variant={groundTruthData.length ? "default" : "outline"}
@@ -467,21 +466,6 @@ export function CSVPrediction() {
                           : "No data"}
                       </Badge>
                     </div>
-
-                    {groundTruthData.length > 0 && predictedData.length > 0 && (
-                      <div className="flex items-center justify-between mt-2 pt-2 border-t border-blue-200">
-                        <div className="flex items-center gap-2">
-                          <SplitSquareVertical className="h-4 w-4 text-blue-700" />
-                          <span className="text-sm font-medium text-gray-700">
-                            Side-by-Side View
-                          </span>
-                        </div>
-                        <Switch
-                          checked={showSideBySide}
-                          onCheckedChange={setShowSideBySide}
-                        />
-                      </div>
-                    )}
                   </div>
 
                   <div className="mt-4">
@@ -572,6 +556,7 @@ export function CSVPrediction() {
             <TabsContent value="visualization" className="pt-4">
               {groundTruthData.length > 0 || predictedData.length > 0 ? (
                 <div className="space-y-4" key={dataKey}>
+                  {/* View mode toggle (only show when both data sets are available) */}
                   {groundTruthData.length > 0 && predictedData.length > 0 && (
                     <div className="flex items-center justify-end gap-2 mb-2">
                       <TooltipProvider>
@@ -588,7 +573,11 @@ export function CSVPrediction() {
                             </div>
                           </TooltipTrigger>
                           <TooltipContent>
-                            <p>Compare ground truth vs prediction</p>
+                            <p>
+                              {showSideBySide
+                                ? "Switch to overlapping view"
+                                : "Switch to side-by-side view"}
+                            </p>
                           </TooltipContent>
                         </Tooltip>
                       </TooltipProvider>
@@ -596,22 +585,20 @@ export function CSVPrediction() {
                   )}
 
                   {/* The visualization component with side-by-side capability */}
-                  {groundTruthData.length > 0 &&
-                  predictedData.length > 0 &&
-                  showSideBySide ? (
+                  {groundTruthData.length > 0 && predictedData.length > 0 ? (
                     <PoseNet3DVisualization
                       poseData={groundTruthData}
                       predictedData={predictedData}
-                      showSideBySide={true}
-                      groundTruthLabel="Ground Truth (Server)"
-                      predictedLabel="Prediction (CSV)"
+                      showSideBySide={showSideBySide}
+                      groundTruthLabel="True Sample"
+                      predictedLabel="Prediction"
                     />
                   ) : groundTruthData.length > 0 ? (
                     <PoseNet3DVisualization
                       poseData={groundTruthData}
                       predictedData={[]}
                       showSideBySide={false}
-                      groundTruthLabel="Ground Truth (Server)"
+                      groundTruthLabel="True Sample"
                       predictedLabel=""
                     />
                   ) : (
@@ -619,7 +606,7 @@ export function CSVPrediction() {
                       poseData={predictedData}
                       predictedData={[]}
                       showSideBySide={false}
-                      groundTruthLabel="Prediction (CSV)"
+                      groundTruthLabel="Prediction"
                       predictedLabel=""
                     />
                   )}

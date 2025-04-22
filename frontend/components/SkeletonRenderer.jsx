@@ -16,6 +16,7 @@ export function SkeletonRenderer({
   isGroundTruth = true,
   label = "Skeleton",
   onRenderComplete = () => {},
+  comparisonPoseData = null, // Add option for comparison pose data
 }) {
   // Get shared state from context
   const { currentFrame, autoRotate, setHasSkeletonData } = useSkeletonContext();
@@ -38,6 +39,9 @@ export function SkeletonRenderer({
       console.log("Missing container or pose data");
       return;
     }
+
+    // Clone the primary poseData for comparison if not provided separately
+    const comparisonData = comparisonPoseData || poseData;
 
     // Get container dimensions
     const width = containerRef.current.clientWidth;
@@ -106,6 +110,9 @@ export function SkeletonRenderer({
     // Add label to identify view
     addLabel(scene, label, isGroundTruth);
 
+    // Add color legend
+    addColorLegend(scene);
+
     // Animation loop with forced rotation that works during playback
     const animate = () => {
       requestRef.current = requestAnimationFrame(animate);
@@ -127,8 +134,13 @@ export function SkeletonRenderer({
 
     animate();
 
-    // Initial skeleton update
+    // Initial skeleton update - update both primary and comparison skeletons
     updateSkeleton(currentFrame);
+
+    // If comparison data exists, create a comparison skeleton
+    if (comparisonPoseData) {
+      updateComparisonSkeleton(currentFrame);
+    }
 
     // Signal that rendering is complete
     onRenderComplete();
@@ -214,8 +226,28 @@ export function SkeletonRenderer({
     }
   }, [currentFrame, autoRotate]);
 
+  // Update comparison skeleton when the current frame changes
+  useEffect(() => {
+    if (sceneRef.current && comparisonPoseData) {
+      updateComparisonSkeleton(currentFrame);
+    }
+  }, [currentFrame, comparisonPoseData]);
+
+  // Sync rotation between both skeletons
+  useEffect(() => {
+    if (autoRotate && skeletonRef.current && comparisonSkeletonRef.current) {
+      // Apply the same rotation to the comparison skeleton
+      comparisonSkeletonRef.current.rotation.copy(skeletonRef.current.rotation);
+    }
+  }, [autoRotate, rotationAngleRef.current]);
+
   // Function to add a text label to the scene
-  const addLabel = (scene, text, isGroundTruth) => {
+  const addLabel = (
+    scene,
+    text,
+    isGroundTruth,
+    position = { x: 0, y: 3.5, z: 0 }
+  ) => {
     const canvas = document.createElement("canvas");
     const context = canvas.getContext("2d");
     canvas.width = 256;
@@ -245,7 +277,7 @@ export function SkeletonRenderer({
     // Create mesh
     const geometry = new THREE.PlaneGeometry(2, 0.5);
     const label = new THREE.Mesh(geometry, material);
-    label.position.set(0, 3.5, 0); // Position above the scene
+    label.position.set(position.x, position.y, position.z); // Use provided position
     label.rotation.x = -Math.PI / 12; // Tilt slightly
 
     scene.add(label);
@@ -253,7 +285,71 @@ export function SkeletonRenderer({
     return label;
   };
 
+  // Add a color legend to explain the skeleton colors
+  const addColorLegend = (scene) => {
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+    canvas.width = 512;
+    canvas.height = 100;
+
+    // Draw background
+    context.fillStyle = "rgba(25, 25, 25, 0.7)";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.strokeStyle = "rgba(200, 200, 200, 0.8)";
+    context.lineWidth = 2;
+    context.strokeRect(0, 0, canvas.width, canvas.height);
+
+    // Draw legend title
+    context.font = "bold 24px Arial";
+    context.fillStyle = "white";
+    context.textAlign = "center";
+    context.textBaseline = "top";
+    context.fillText("Legend", canvas.width / 2, 10);
+
+    // Draw color samples and labels
+    const drawColorSample = (color, label, x) => {
+      // Draw color box
+      context.fillStyle = color;
+      context.fillRect(x - 60, 50, 30, 30);
+      context.strokeStyle = "white";
+      context.strokeRect(x - 60, 50, 30, 30);
+
+      // Draw label
+      context.font = "18px Arial";
+      context.fillStyle = "white";
+      context.textAlign = "center";
+      context.textBaseline = "middle";
+      context.fillText(label, x, 65);
+    };
+
+    // Add color samples
+    drawColorSample("rgb(52, 152, 219)", "True Sample", 170);
+    drawColorSample("rgb(231, 76, 60)", "Prediction", 340);
+
+    // Create texture
+    const texture = new THREE.CanvasTexture(canvas);
+    const material = new THREE.MeshBasicMaterial({
+      map: texture,
+      transparent: true,
+      side: THREE.DoubleSide,
+    });
+
+    // Create mesh
+    const geometry = new THREE.PlaneGeometry(3, 0.75);
+    const legend = new THREE.Mesh(geometry, material);
+    legend.position.set(0, 3.8, 0); // Position above the scene
+    legend.rotation.x = -Math.PI / 12; // Tilt slightly
+
+    scene.add(legend);
+
+    return legend;
+  };
+
   // Update skeleton mesh based on frame data
+  // Reference to the comparison skeleton
+  const comparisonSkeletonRef = useRef(null);
+
+  // Update primary skeleton
   const updateSkeleton = (frameIndex) => {
     if (!poseData || poseData.length === 0 || !sceneRef.current) return;
 
@@ -277,7 +373,7 @@ export function SkeletonRenderer({
     const pointMaterial = new THREE.MeshPhongMaterial({
       color: isGroundTruth ? 0x3498db : 0xe74c3c, // Blue for ground truth, red for prediction
     });
-    const jointRadius = 0.035; // Larger joints for visibility
+    const jointRadius = 0.05; // Increased joint size for better visibility
 
     // Extract joints from frame data
     for (const key in frameData) {
@@ -363,46 +459,12 @@ export function SkeletonRenderer({
       // Skip if points are too close
       if (distance < 0.01) return;
 
-      // Choose color based on body part and whether it's ground truth or prediction
-      let boneColor;
-      const isGroundTruthModifier = isGroundTruth ? 0 : 0x222222; // Slightly darker for prediction
-
-      if (
-        connection.some(
-          (j) =>
-            j.includes("arm") ||
-            j.includes("elbow") ||
-            j.includes("wrist") ||
-            j.includes("hand")
-        )
-      ) {
-        boneColor = 0x3498db - isGroundTruthModifier; // blue for arms
-      } else if (
-        connection.some(
-          (j) =>
-            j.includes("leg") ||
-            j.includes("knee") ||
-            j.includes("ankle") ||
-            j.includes("foot")
-        )
-      ) {
-        boneColor = 0x2ecc71 - isGroundTruthModifier; // green for legs
-      } else if (
-        connection.some((j) => j.includes("hip") || j.includes("shoulder"))
-      ) {
-        boneColor = 0xe74c3c - isGroundTruthModifier; // red for torso
-      } else {
-        boneColor = 0x9b59b6 - isGroundTruthModifier; // purple for head
-      }
+      // Choose color based on ground truth or prediction - single color scheme
+      const boneColor = isGroundTruth ? 0x3498db : 0xe74c3c; // Blue for ground truth, red for prediction
 
       // Create bone cylinder
       const boneMaterial = new THREE.MeshPhongMaterial({ color: boneColor });
-      const boneGeometry = new THREE.CylinderGeometry(
-        0.015,
-        0.015,
-        distance,
-        6
-      ); // Thicker bones
+      const boneGeometry = new THREE.CylinderGeometry(0.03, 0.03, distance, 8); // Much thicker bones for better visibility
 
       // Move pivot point to start of cylinder
       boneGeometry.translate(0, distance / 2, 0);
@@ -429,6 +491,163 @@ export function SkeletonRenderer({
     // Restore rotation if we had one and auto-rotate is enabled
     if (currentRotation && autoRotate) {
       skeletonGroup.rotation.copy(currentRotation);
+    } else if (autoRotate) {
+      // If this is the first time, use the current rotation angle from ref
+      skeletonGroup.rotation.y = rotationAngleRef.current;
+    }
+  };
+
+  // Update comparison skeleton
+  const updateComparisonSkeleton = (frameIndex) => {
+    if (
+      !comparisonPoseData ||
+      comparisonPoseData.length === 0 ||
+      !sceneRef.current
+    )
+      return;
+
+    // Make sure the frame index is valid
+    const validFrameIndex = Math.min(frameIndex, comparisonPoseData.length - 1);
+
+    // Save the current rotation if a comparison skeleton exists
+    let currentRotation = null;
+    if (comparisonSkeletonRef.current) {
+      currentRotation = comparisonSkeletonRef.current.rotation.clone();
+      sceneRef.current.remove(comparisonSkeletonRef.current);
+    }
+
+    const frameData = comparisonPoseData[validFrameIndex];
+    const skeletonGroup = new THREE.Group();
+    comparisonSkeletonRef.current = skeletonGroup;
+
+    // Generate joint spheres
+    const joints = {};
+    // Use different colors for comparison skeleton
+    const pointMaterial = new THREE.MeshPhongMaterial({
+      color: 0xe74c3c, // Red for prediction/comparison
+      opacity: 0.9,
+      transparent: true,
+    });
+    const jointRadius = 0.05; // Increased joint size
+
+    // Extract joints from frame data
+    for (const key in frameData) {
+      // Check if this is a joint coordinate
+      if (key.endsWith("_x") || key.endsWith("_y") || key.endsWith("_z")) {
+        const baseName = key.substring(0, key.length - 2);
+
+        if (!joints[baseName]) {
+          joints[baseName] = {};
+        }
+
+        const coord = key.charAt(key.length - 1);
+        joints[baseName][coord] = frameData[key];
+      }
+    }
+
+    // Get appropriate scale factor for the data
+    const scaleFactor = checkIfNeedsScaling(joints);
+
+    // Simple loop to create joint spheres
+    let validJointCount = 0;
+    Object.keys(joints).forEach((jointName) => {
+      const joint = joints[jointName];
+
+      // Skip if we don't have enough coordinate data
+      if (joint.x === undefined || joint.y === undefined) {
+        return;
+      }
+
+      validJointCount++;
+
+      // Use z if available, otherwise use 0
+      const x = joint.x * scaleFactor;
+      const y = joint.y * scaleFactor;
+      const z = (joint.z || 0) * scaleFactor;
+
+      const sphere = new THREE.Mesh(
+        new THREE.SphereGeometry(jointRadius, 8, 8),
+        pointMaterial
+      );
+
+      sphere.position.set(x, y, z);
+      skeletonGroup.add(sphere);
+    });
+
+    // Create bone connections
+    POSE_CONNECTIONS.forEach((connection) => {
+      const [joint1Name, joint2Name] = connection;
+      const joint1 = joints[joint1Name];
+      const joint2 = joints[joint2Name];
+
+      // Skip if any joint is missing
+      if (!joint1 || !joint2) return;
+      if (
+        joint1.x === undefined ||
+        joint1.y === undefined ||
+        joint2.x === undefined ||
+        joint2.y === undefined
+      )
+        return;
+
+      const start = new THREE.Vector3(
+        joint1.x * scaleFactor,
+        joint1.y * scaleFactor,
+        (joint1.z || 0) * scaleFactor
+      );
+
+      const end = new THREE.Vector3(
+        joint2.x * scaleFactor,
+        joint2.y * scaleFactor,
+        (joint2.z || 0) * scaleFactor
+      );
+
+      // Calculate bone properties
+      const direction = new THREE.Vector3().subVectors(end, start);
+      const distance = direction.length();
+
+      // Skip if points are too close
+      if (distance < 0.01) return;
+
+      // Single color for comparison skeleton
+      const boneColor = 0xe74c3c; // Red for prediction/comparison
+
+      // Create bone cylinder
+      const boneMaterial = new THREE.MeshPhongMaterial({
+        color: boneColor,
+        opacity: 0.9,
+        transparent: true,
+      });
+      const boneGeometry = new THREE.CylinderGeometry(0.03, 0.03, distance, 8);
+
+      // Move pivot point to start of cylinder
+      boneGeometry.translate(0, distance / 2, 0);
+      boneGeometry.rotateX(Math.PI / 2);
+
+      const bone = new THREE.Mesh(boneGeometry, boneMaterial);
+      bone.position.copy(start);
+      bone.lookAt(end);
+      skeletonGroup.add(bone);
+    });
+
+    // Add skeleton to scene
+    sceneRef.current.add(skeletonGroup);
+
+    // Add class for external style targeting
+    skeletonGroup.userData.className = "comparison-skeleton-group";
+
+    // Very simple Y-flip if needed
+    const needsYFlip = checkIfNeedsYFlip(joints);
+    if (needsYFlip) {
+      skeletonGroup.scale.y = -1;
+    }
+
+    // Restore rotation if we had one and auto-rotate is enabled
+    if (currentRotation && autoRotate) {
+      skeletonGroup.rotation.copy(currentRotation);
+    } else if (autoRotate && comparisonSkeletonRef.current) {
+      // Match the comparison skeleton's rotation if it exists
+      skeletonGroup.rotation.copy(comparisonSkeletonRef.current.rotation);
     } else if (autoRotate) {
       // If this is the first time, use the current rotation angle from ref
       skeletonGroup.rotation.y = rotationAngleRef.current;

@@ -5,28 +5,20 @@ import React, { useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AlertCircle } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 
-// Import our modular components
+// Import components
 import { SkeletonProvider, useSkeletonContext } from "./SkeletonContext";
 import { SkeletonRenderer } from "./SkeletonRenderer";
 import { SkeletonControls } from "./SkeletonControls";
 import { AnimationManager } from "./AnimationManager";
 
-/**
- * Main visualization component that orchestrates rendering skeletons
- *
- * @param {Object} props Component props
- * @param {Array} props.poseData Ground truth pose data from server
- * @param {Array} props.predictedData Predicted pose data from CSV
- * @param {boolean} props.showSideBySide Whether to show comparison view
- * @param {string} props.groundTruthLabel Label for ground truth view
- * @param {string} props.predictedLabel Label for prediction view
- */
 export function PoseNet3DVisualization({
   poseData = [],
   predictedData = [],
   showSideBySide = false,
-  groundTruthLabel = "Ground Truth",
+  groundTruthLabel = "Sample Pose",
   predictedLabel = "Prediction",
 }) {
   return (
@@ -57,6 +49,9 @@ function PoseNetVisualizationContent({
   const [leftRendered, setLeftRendered] = useState(false);
   const [rightRendered, setRightRendered] = useState(false);
 
+  // Toggle for overlapping skeletons display mode
+  const [showOverlapping, setShowOverlapping] = useState(!showSideBySide);
+
   return (
     <Card className="shadow-md border-blue-100">
       <CardContent className="p-6">
@@ -65,11 +60,31 @@ function PoseNetVisualizationContent({
           <AnimationManager
             poseData={poseData}
             predictedData={predictedData}
-            showSideBySide={showSideBySide}
+            showSideBySide={showSideBySide && !showOverlapping}
           />
 
+          {/* Display mode toggle */}
+          {predictedData && predictedData.length > 0 && (
+            <div className="flex items-center space-x-2 mb-4">
+              <Switch
+                id="display-mode"
+                checked={showOverlapping}
+                onCheckedChange={setShowOverlapping}
+                disabled={!showSideBySide}
+              />
+              <Label htmlFor="display-mode" className="cursor-pointer">
+                {showOverlapping
+                  ? "Showing overlapping skeletons"
+                  : showSideBySide
+                  ? "Showing side-by-side view"
+                  : "Showing single skeleton"}
+              </Label>
+            </div>
+          )}
+
           {/* Skeleton visualization area */}
-          {showSideBySide ? (
+          {showSideBySide && !showOverlapping ? (
+            // Side-by-side view
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <div className="text-center text-lg font-medium text-blue-700 mb-2">
@@ -95,12 +110,24 @@ function PoseNetVisualizationContent({
               </div>
             </div>
           ) : (
-            <SkeletonRenderer
-              poseData={poseData}
-              isGroundTruth={true}
-              label={groundTruthLabel}
-              onRenderComplete={() => setLeftRendered(true)}
-            />
+            // Overlapping view or single skeleton view
+            <div>
+              <div className="text-center text-lg font-medium text-blue-700 mb-2">
+                {predictedData && predictedData.length > 0 && showOverlapping
+                  ? `${groundTruthLabel} vs ${predictedLabel}`
+                  : groundTruthLabel}
+              </div>
+              <SkeletonRenderer
+                poseData={poseData}
+                isGroundTruth={true}
+                label={groundTruthLabel}
+                comparisonPoseData={showOverlapping ? predictedData : null}
+                onRenderComplete={() => {
+                  setLeftRendered(true);
+                  setRightRendered(true); // Both are rendered in the same view
+                }}
+              />
+            </div>
           )}
 
           {/* Warning if no skeleton data is found */}
@@ -121,11 +148,14 @@ function PoseNetVisualizationContent({
             </Alert>
           )}
 
+          {/* Skeleton color legend is now built into the 3D view */}
+          {/* Removed separate legend here since it's built into the 3D view */}
+
           {/* Controls */}
           {leftRendered && (!showSideBySide || rightRendered) && (
             <SkeletonControls
               totalFrames={poseData?.length || 0}
-              showSideBySide={showSideBySide}
+              showSideBySide={showSideBySide && !showOverlapping}
               groundTruthFrames={poseData?.length || 0}
               predictedFrames={predictedData?.length || 0}
             />
