@@ -40,6 +40,7 @@ export const revalidate = 0;
 
 export function CSVPrediction() {
   const [isDragging, setIsDragging] = useState(false);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [file, setFile] = useState<File | null>(null);
   const [csvData, setCsvData] = useState<CSVData | null>(null);
   const [loading, setLoading] = useState(false);
