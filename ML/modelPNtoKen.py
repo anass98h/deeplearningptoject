@@ -84,6 +84,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import make_scorer, mean_squared_error
 from joblib import dump
 import warnings, os
+from sklearn.metrics import mean_squared_error, mean_absolute_error
 
 
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -108,7 +109,7 @@ MAX_EPOCHS = 200            # hard cap; EarlyStopping usually ends sooner
 
 param_grid = {
     "model__units":        [128],
-    "model__n_hidden":     [4],
+    "model__n_hidden":     [10],
     "batch_size":   [128],
     "model__learning_rate":[0.001],
 }
@@ -156,7 +157,7 @@ grid = GridSearchCV(
     estimator=reg,
     param_grid=param_grid,
     scoring=neg_mse,
-    cv=3,
+    cv=10,
     n_jobs=-1,
     refit=True,
     verbose=2,                 # we’ll drive output via tqdm instead
@@ -180,15 +181,28 @@ for k, v in grid_result.best_params_.items():
     print(f"   • {k:12s}: {v}")
 print("Best CV MSE :", -grid_result.best_score_)
 
-best_model = grid_result.best_estimator_.model_   # Keras model object
+best_model = grid_result.best_estimator_.model_
 
 # ------------------------------------------------------------------ #
-# 7.  Evaluate on held‑out test set                                  #
+# 7. Evaluate on held-out test set                                  #
 # ------------------------------------------------------------------ #
 test_mse, test_mae = best_model.evaluate(X_test, y_test, verbose=0)
-print("\n📊 Test MSE :", test_mse)
-print("📊 Test MAE :", test_mae)
 
+# Inverse-transform and recompute in original units
+y_pred_scaled = best_model.predict(X_test)
+y_test_orig   = y_scaler.inverse_transform(y_test)
+y_pred_orig   = y_scaler.inverse_transform(y_pred_scaled)
+
+from sklearn.metrics import mean_squared_error, mean_absolute_error
+
+mse_orig = mean_squared_error(y_test_orig, y_pred_orig)
+mae_orig = mean_absolute_error(y_test_orig, y_pred_orig)
+
+print("\n📊 Scaled Test MSE :", test_mse)
+print("📊 Scaled Test MAE :", test_mae)
+
+print("\n📊 Original-scale Test MSE :", mse_orig)
+print("📊 Original-scale Test MAE :", mae_orig)
 # ------------------------------------------------------------------ #
 # 8.  Save artefacts                                                 #
 # ------------------------------------------------------------------ #
