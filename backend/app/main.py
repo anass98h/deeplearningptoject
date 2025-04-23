@@ -568,7 +568,7 @@ async def get_kinect_data():
     """
     try:
         # Path to the CSV file
-        csv_path = Path("./A1_kinect.csv")
+        csv_path = Path("./your_file_with_predicted_z.csv")
         
         # Check if file exists
         if not csv_path.exists():
