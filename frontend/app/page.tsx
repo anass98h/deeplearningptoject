@@ -8,10 +8,10 @@ import {
 } from "@/components/ui/card";
 import { CSVPrediction } from "@/components/csv-prediction";
 import PoseNetPrediction from "@/components/posenet-prediction";
+import { FrameTrimmer } from "@/components/FrameTrimmer";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
-
 
 export default function Dashboard() {
   return (
@@ -27,7 +27,7 @@ export default function Dashboard() {
         </div>
 
         <Tabs defaultValue="csv" className="w-full">
-          <TabsList className="grid w-full max-w-md grid-cols-2 mb-8 p-1 bg-gray-100 rounded-lg">
+          <TabsList className="grid w-full max-w-md grid-cols-3 mb-8 p-1 bg-gray-100 rounded-lg">
             <TabsTrigger
               value="csv"
               className="rounded-md data-[state=active]:bg-white data-[state=active]:shadow-md transition-all duration-200"
@@ -38,17 +38,23 @@ export default function Dashboard() {
               value="posenet"
               className="rounded-md data-[state=active]:bg-white data-[state=active]:shadow-md transition-all duration-200"
             >
-              PoseNet Predictions
+              PoseNet
+            </TabsTrigger>
+            <TabsTrigger
+              value="trimmer"
+              className="rounded-md data-[state=active]:bg-white data-[state=active]:shadow-md transition-all duration-200"
+            >
+              Frame Trimmer
             </TabsTrigger>
           </TabsList>
 
           <TabsContent value="csv" className="mt-0">
             <Card className="border-0 shadow-xl overflow-hidden">
-              <CardHeader className="bg-gradient-to-r from-gray-50 to-gray-100 border-b">
-                <CardTitle className="text-xl text-gray-800">
+              <CardHeader className="border-b border-gray-100 bg-white px-6 py-4">
+                <CardTitle className="text-xl font-semibold text-gray-800">
                   CSV-based Predictions
                 </CardTitle>
-                <CardDescription>
+                <CardDescription className="text-gray-500 mt-1">
                   Upload a CSV file to perform regression or classification
                   predictions.
                 </CardDescription>
@@ -61,16 +67,33 @@ export default function Dashboard() {
 
           <TabsContent value="posenet" className="mt-0">
             <Card className="border-0 shadow-xl overflow-hidden">
-              <CardHeader className="bg-gradient-to-r from-gray-50 to-gray-100 border-b">
-                <CardTitle className="text-xl text-gray-800">
+              <CardHeader className="border-b border-gray-100 bg-white px-6 py-4">
+                <CardTitle className="text-xl font-semibold text-gray-800">
                   PoseNet Predictions
                 </CardTitle>
-                <CardDescription>
+                <CardDescription className="text-gray-500 mt-1">
                   Use your webcam for real-time pose detection and predictions.
                 </CardDescription>
               </CardHeader>
               <CardContent className="p-0">
                 <PoseNetPrediction />
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="trimmer" className="mt-0">
+            <Card className="border-0 shadow-xl overflow-hidden">
+              <CardHeader className="border-b border-gray-100 bg-white px-6 py-4">
+                <CardTitle className="text-xl font-semibold text-gray-800">
+                  Frame Trimmer
+                </CardTitle>
+                <CardDescription className="text-gray-500 mt-1">
+                  Upload a CSV file to remove unwanted frames and visualize the
+                  results.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="p-6">
+                <FrameTrimmer />
               </CardContent>
             </Card>
           </TabsContent>
