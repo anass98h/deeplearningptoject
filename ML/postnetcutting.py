@@ -1,224 +1,167 @@
-#!/usr/bin/env python3
-"""
-train_exercise_segmenter.py
---------------------------
-Given pairs of PoseNet‑extracted full‑length CSVs and their manually
-trimmed counterparts (containing only the exercise segment), this script
-builds a sequence model that predicts – for every frame – whether the
-exercise is being performed. From the per‑frame probabilities we later
-derive start/end frame indices automatically.
-
-Highlights
-==========
-* Robust loader that aligns full and trimmed sequences on `FrameNo`.
-* Generates binary labels (1 = in‑exercise, 0 = outside).
-* Optional StandardScaler on XY features.
-* Pads sequences to the longest length and uses masking so the model
-  ignores padded timesteps.
-* Bidirectional LSTM ➜ TimeDistributed Dense with sigmoid output.
-* EarlyStopping + model checkpointing; saves best model as `.keras`.
-* Provides an `infer_segment()` helper that turns raw probabilities into
-  integer `(start_frame, end_frame)` using a configurable threshold and
-  minimum segment length.
-* Command‑line flags for most hyper‑parameters so you can sweep with
-  grid/search tools later.
-"""
-
-# -------------------------------------------------------------------- #
-# 0. Imports & CLI                                                     #
-# -------------------------------------------------------------------- #
-import argparse, warnings, os
-from pathlib import Path
-
+import os
 import numpy as np
 import pandas as pd
+from glob import glob
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import precision_score, recall_score, f1_score, classification_report
+from scikeras.wrappers import KerasClassifier
 import tensorflow as tf
 from tensorflow import keras
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split
+from pathlib import Path
 
-warnings.filterwarnings("ignore", category=UserWarning)
-np.random.seed(42)
-tf.random.set_seed(42)
+from pathlib import Path
+import numpy as np
+import pandas as pd
 
-# -------------------------------------------------------------------- #
-# 1. Command‑line arguments                                            #
-# -------------------------------------------------------------------- #
-parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-parser.add_argument("--dir_full",   type=Path, default="ML/data/output_poses",      help="Directory with full‑length PoseNet CSVs")
-parser.add_argument("--dir_trim",   type=Path, default="ML/data/output_poses_preprocessed",  help="Directory with trimmed CSVs (exercise only)")
-parser.add_argument("--use_scaler", action="store_true", help="Apply StandardScaler to XY features")
-parser.add_argument("--units",      type=int,   default=64,   help="LSTM units per direction")
-parser.add_argument("--n_layers",   type=int,   default=2,    help="Number of stacked Bi‑LSTM layers")
-parser.add_argument("--batch",      type=int,   default=32,   help="Batch size")
-parser.add_argument("--epochs",     type=int,   default=100,  help="Max epochs")
-parser.add_argument("--patience",   type=int,   default=10,   help="EarlyStopping patience")
-parser.add_argument("--min_seg",    type=int,   default=15,   help="Minimum accepted segment length at inference (frames)")
-parser.add_argument("--prob_th",    type=float, default=0.5,  help="Probability threshold for positive class at inference")
-parser.add_argument("--out",        type=Path,  default="exercise_segmenter.keras", help="Path to save best model")
-args = parser.parse_args()
+full_dir    = Path(r"ML/data/output_poses")
+trimmed_dir = Path(r"ML/data/output_poses_preprocessed")
 
-# -------------------------------------------------------------------- #
-# 2. Helpers                                                           #
-# -------------------------------------------------------------------- #
+X_processed_flat, y_frames, video_ids = [], [], []
+offsets = {}            # key → (start_idx, end_idx) in X_processed_flat
 
-def xy_columns(df: pd.DataFrame) -> list[str]:
-    """Return columns ending with '_x' or '_y' in original order."""
-    return [c for c in df.columns if c.endswith(("_x", "_y"))]
+def smooth_sequence(seq, window=5):
+    pad = window // 2
+    seq_padded = np.pad(seq, ((pad, pad), (0, 0)), mode='edge')
+    out = np.empty_like(seq)
+    for i in range(len(seq)):
+        out[i] = seq_padded[i:i+window].mean(axis=0)
+    return out
 
-
-def load_pair(full_csv: Path, trim_csv: Path):
-    """Load a (full, trimmed) pair and return numpy (frames, feats), labels."""
-    df_full = pd.read_csv(full_csv).rename(columns=str.strip)
-    df_trim = pd.read_csv(trim_csv).rename(columns=str.strip)
-
-    # Determine the [start, end] based on FrameNo present in trimmed
-    start_f, end_f = df_trim["FrameNo"].min(), df_trim["FrameNo"].max()
-
-    # Keep only XY columns + FrameNo
-    xy_cols = xy_columns(df_full)
-    feats   = df_full[xy_cols].to_numpy(dtype=float)
-    frames  = df_full["FrameNo"].to_numpy()
-
-    labels  = ((frames >= start_f) & (frames <= end_f)).astype(np.float32)
-    return feats, labels
-
-
-def pad_sequences(seqs, pad_value=0.0):
-    """Pad a list of 2‑D arrays (T_i, F) to shape (N, T_max, F)."""
-    lengths = [s.shape[0] for s in seqs]
-    T_max   = max(lengths)
-    F       = seqs[0].shape[1]
-    batch   = np.full((len(seqs), T_max, F), pad_value, dtype=np.float32)
-    masks   = np.zeros((len(seqs), T_max), dtype=bool)
-    for i, seq in enumerate(seqs):
-        batch[i, :seq.shape[0], :] = seq
-        masks[i, :seq.shape[0]] = True
-    return batch, masks, lengths
-
-
-def infer_segment(probabilities: np.ndarray, threshold: float = 0.5, min_len: int = 15):
-    """Convert per‑frame probabilities ➜ (start, end) indices or (None, None)."""
-    pos = probabilities >= threshold
-    # Find longest contiguous positive run ≥ min_len
-    best_start = best_end = None
-    current_start = None
-    for i, p in enumerate(pos):
-        if p and current_start is None:
-            current_start = i
-        elif not p and current_start is not None:
-            span_len = i - current_start
-            if span_len >= min_len:
-                best_start, best_end = current_start, i - 1
-                break
-            current_start = None
-    # Edge case: run goes till the last frame
-    if current_start is not None and (len(pos) - current_start) >= min_len:
-        best_start, best_end = current_start, len(pos) - 1
-    return best_start, best_end
-
-# -------------------------------------------------------------------- #
-# 3. Gather training data                                             #
-# -------------------------------------------------------------------- #
-print("📂  Scanning for CSV pairs…")
-pairs = []
-for full_csv in sorted(args.dir_full.glob("*.csv")):
-    key = full_csv.stem
-    trim_csv = args.dir_trim / f"{key}_exercise.csv"
-    if not trim_csv.exists():
-        print(f"⚠️  {key}: missing trimmed file – skipped.")
+full_files = sorted(full_dir.glob("*.csv"))
+cursor = 0
+for full_path in full_files:
+    key = full_path.stem
+    trim_path = trimmed_dir / f"{key}.csv"
+    if not trim_path.exists():
+        print(f"⚠️  {key}: trimmed file missing – skipped.")
         continue
-    pairs.append((full_csv, trim_csv))
 
-if not pairs:
-    raise RuntimeError("No valid (full, trimmed) CSV pairs found.")
+    df_full = pd.read_csv(full_path).sort_values("FrameNo")
+    df_trim = pd.read_csv(trim_path).sort_values("FrameNo")
+    if df_full.empty or df_trim.empty:
+        print(f"⚠️  {key}: empty CSV – skipped.")
+        continue
 
-feat_seqs, label_seqs = [], []
-for full_csv, trim_csv in pairs:
-    X_i, y_i = load_pair(full_csv, trim_csv)
-    feat_seqs.append(X_i)
-    label_seqs.append(y_i[:, None])  # make (T,1) so shapes align
-    print(f"✅  {full_csv.stem}: frames={X_i.shape[0]}")
+    # Label frames
+    start_fno, end_fno = df_trim["FrameNo"].iloc[[0, -1]]
+    labels = df_full["FrameNo"].between(start_fno, end_fno).astype(int).to_numpy()
 
-# -------------------------------------------------------------------- #
-# 4. Optional scaling                                                 #
-# -------------------------------------------------------------------- #
-if args.use_scaler:
-    scaler = StandardScaler().fit(np.vstack(feat_seqs))
-    feat_seqs = [scaler.transform(f) for f in feat_seqs]
-else:
-    scaler = None
+    pose_cols = [c for c in df_full.columns if c != "FrameNo"]
+    raw_pose  = df_full[pose_cols].to_numpy(dtype=float)
 
-# Pad & mask
-X, masks, lengths = pad_sequences(feat_seqs)
-y, _, _           = pad_sequences(label_seqs, pad_value=0.0)
+    # Smoothing + delta features
+    smoothed = smooth_sequence(raw_pose, window=5)
+    deltas   = np.diff(smoothed, axis=0, prepend=smoothed[[0]])
+    features = np.hstack([smoothed, deltas])
 
-num_samples, T_max, n_features = X.shape
-print(f"📊  Dataset shape: {X.shape}, Labels: {y.shape}")
+    X_processed_flat.append(features)
+    y_frames.append(labels)
+    video_ids.extend([key]*len(labels))
 
-# -------------------------------------------------------------------- #
-# 5. Train / test split                                               #
-# -------------------------------------------------------------------- #
-train_idx, test_idx = train_test_split(np.arange(num_samples), test_size=0.2, random_state=42)
-X_train, X_test = X[train_idx], X[test_idx]
-y_train, y_test = y[train_idx], y[test_idx]
-mask_train, mask_test = masks[train_idx], masks[test_idx]
+    offsets[key] = (cursor, cursor + len(features))  # record slice for later
+    cursor += len(features)
 
-# -------------------------------------------------------------------- #
-# 6. Build model                                                      #
-# -------------------------------------------------------------------- #
-inputs   = keras.Input(shape=(T_max, n_features))
-x        = keras.layers.Masking(mask_value=0.0)(inputs)
-for _ in range(args.n_layers):
-    x = keras.layers.Bidirectional(keras.layers.LSTM(args.units, return_sequences=True))(x)
-outputs  = keras.layers.TimeDistributed(keras.layers.Dense(1, activation="sigmoid"))(x)
-model    = keras.Model(inputs, outputs)
-model.compile(optimizer=keras.optimizers.Adam(), loss=keras.losses.BinaryCrossentropy(), metrics=[keras.metrics.BinaryAccuracy()])
-model.summary()
+    print(f"✅ {key}: {labels.sum()} exercise frames of {len(labels)} total.")
 
-# Sample weights so padded positions don't contribute to loss
-sample_weights = mask_train.astype(np.float32)
-val_weights    = mask_test.astype(np.float32)
+if not X_processed_flat:
+    raise RuntimeError("No valid video pairs found.")
 
-callbacks = [
-    keras.callbacks.EarlyStopping(monitor="val_loss", patience=args.patience, restore_best_weights=True),
-    keras.callbacks.ModelCheckpoint(args.out, monitor="val_loss", save_best_only=True),
-]
+X_processed = np.vstack(X_processed_flat)   # (N_frames, D_feat)
+y_frames    = np.concatenate(y_frames)      # (N_frames,)
 
-history = model.fit(
-    X_train, y_train,
-    epochs=args.epochs,
-    batch_size=args.batch,
-    validation_data=(X_test, y_test, val_weights),
-    sample_weight=sample_weights,
-    callbacks=callbacks,
-    verbose=2,
-)
+# Now X_processed and y_frames are aligned.
+# Standardize features
+scaler = StandardScaler()
+# Split train/test by video before fitting scaler, to avoid leaking test info in scaler.
+train_idx, test_idx = train_test_split(np.arange(len(video_ids)), test_size=0.2, shuffle=True, 
+                                       stratify=video_ids)  # stratify by video id so each split has some frames from each video; 
+                                                             # alternatively, split by unique videos for a stricter separation.
+X_train = X_processed[train_idx]
+X_test = X_processed[test_idx]
+y_train = y_frames[train_idx]
+y_test = y_frames[test_idx]
 
-# -------------------------------------------------------------------- #
-# 7. Evaluation                                                       #
-# -------------------------------------------------------------------- #
-print("\n🧪  Evaluating on held‑out videos…")
-loss, acc = model.evaluate(X_test, y_test, sample_weight=val_weights, verbose=0)
-print(f"   loss={loss:.4f}, binary_accuracy={acc:.4f}")
+scaler.fit(X_train)
+X_train = scaler.transform(X_train)
+X_test = scaler.transform(X_test)
 
-# -------------------------------------------------------------------- #
-# 8. Save artefacts                                                   #
-# -------------------------------------------------------------------- #
-if scaler is not None:
-    import joblib
-    joblib.dump(scaler, args.out.with_suffix("_scaler.pkl"))
-    print("🔖  Scaler saved.")
+# 3. Build Keras Model (Fully Connected Binary Classifier)
+def create_model(hidden_units=64, hidden_layers=1, dropout_rate=0.0, learning_rate=1e-3):
+    model = keras.Sequential()
+    model.add(keras.layers.Input(shape=(X_train.shape[1],)))
+    # Add hidden layers
+    for _ in range(hidden_layers):
+        model.add(keras.layers.Dense(hidden_units, activation='relu'))
+        if dropout_rate > 0:
+            model.add(keras.layers.Dropout(dropout_rate))
+    # Output layer for binary classification
+    model.add(keras.layers.Dense(1, activation='sigmoid'))
+    # Compile model
+    model.compile(optimizer=keras.optimizers.Adam(learning_rate=learning_rate),
+                  loss='binary_crossentropy',
+                  metrics=['accuracy'])
+    return model
 
-print(f"💾  Best model saved to {args.out}")
+# Wrap the model with scikeras KerasClassifier for use in GridSearchCV
+clf = KerasClassifier(model=create_model, verbose=0)  # we will set parameters via param_grid
 
-# -------------------------------------------------------------------- #
-# 9. Inference demo (optional)                                        #
-# -------------------------------------------------------------------- #
-if __name__ == "__main__":
-    # quick demo on first test sample
-    idx = 0
-    sample = X_test[idx:idx+1]
-    probs  = model.predict(sample)[0, :lengths[test_idx[idx]], 0]
-    s, e   = infer_segment(probs, threshold=args.prob_th, min_len=args.min_seg)
-    print(f"\n📺  Predicted exercise frames: start={s}, end={e}")
+# 4. Hyperparameter Tuning with GridSearchCV
+param_grid = {
+    "model__hidden_units": [64],        # number of neurons in each hidden layer
+    "model__hidden_layers": [5],          # number of hidden layers
+    "model__dropout_rate": [0.3],       # dropout to test (0 for none, 0.3 as an example)
+    "model__learning_rate": [1e-4],    # a couple of learning rates to try
+    "epochs": [20],   # you can increase this; using 20 for speed in example
+    "batch_size": [32] 
+}
+# We use F1-score for selecting the best model. We'll define a scorer for binary F1.
+from sklearn.metrics import make_scorer, f1_score
+f1_scorer = make_scorer(f1_score)
+
+grid = GridSearchCV(estimator=clf, param_grid=param_grid, scoring=f1_scorer, cv=3, n_jobs=-1, verbose=10)
+grid.fit(X_train, y_train)
+
+print("Best hyperparameters:", grid.best_params_)
+best_model = grid.best_estimator_.model_  # Keras model from best estimator
+
+# 5. Evaluate on Test Data
+y_pred_prob = best_model.predict(X_test).reshape(-1)  # predict probabilities
+y_pred = (y_pred_prob >= 0.5).astype(int)             # threshold at 0.5 for binary predictions
+
+print("Test Precision:", precision_score(y_test, y_pred))
+print("Test Recall:", recall_score(y_test, y_pred))
+print("Test F1-score:", f1_score(y_test, y_pred))
+print("\nClassification Report:\n", classification_report(y_test, y_pred, digits=3))
+
+# 6. Post-processing to get start and end frame indices for each video in test set
+# Here we show how to derive start/end for one video sequence. In practice, loop over test videos.
+unique_test_videos = set([video_ids[i] for i in test_idx])
+for vid in unique_test_videos:
+    start, end = offsets[vid]          # indices in X_processed
+    features_scaled = scaler.transform(X_processed[start:end])
+    pred_prob  = best_model.predict(features_scaled).ravel()
+    pred_labels = (pred_prob >= 0.5).astype(int)
+    segments = []
+    in_segment = False
+    seg_start = 0
+    for i, lbl in enumerate(pred_labels):
+        if lbl == 1 and not in_segment:
+            in_segment = True
+            seg_start = i
+        if lbl == 0 and in_segment:
+            # segment ended at i-1
+            segments.append((seg_start, i-1))
+            in_segment = False
+    if in_segment:
+        segments.append((seg_start, len(pred_labels)-1))
+
+    if len(segments) == 0:
+        print(f"No exercise detected in video {vid}")
+    else:
+        # Choose the longest segment as the exercise
+        seg_lengths = [e - s + 1 for (s, e) in segments]
+        best_idx = np.argmax(seg_lengths)
+        start_frame, end_frame = segments[best_idx]
+        print(f"Video {vid}: Predicted exercise segment from frame {start_frame} to {end_frame}")
+        # If needed, you can compare with true start/end from the labels for this video.
