@@ -160,7 +160,7 @@ grid = GridSearchCV(
     cv=10,
     n_jobs=-1,
     refit=True,
-    verbose=2,                 # we’ll drive output via tqdm instead
+    verbose=10,                 # we’ll drive output via tqdm instead
 )
 
 # ------------------------------------------------------------------ #
