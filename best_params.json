@@ -1,0 +1,8 @@
+{
+  "fit__batch_size": 256,
+  "fit__epochs": 25,
+  "model__dropout_rate": 0.3,
+  "model__hidden_layers": 8,
+  "model__hidden_units": 128,
+  "model__learning_rate": 0.0001
+}

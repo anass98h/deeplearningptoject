@@ -1,167 +1,233 @@
-import os
-import numpy as np
-import pandas as pd
-from glob import glob
-from sklearn.model_selection import train_test_split, GridSearchCV
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import precision_score, recall_score, f1_score, classification_report
-from scikeras.wrappers import KerasClassifier
+# ╔════════════════════════════════════════════════════════════════════╗
+#  Pose-boundary detection — clean, self-contained training script
+# ╚════════════════════════════════════════════════════════════════════╝
+"""
+Pipeline
+--------
+1.  Load every full-pose CSV and its trimmed counterpart.
+2.  Build smoothed + δ-features and binary frame labels.
+3.  Split *entire videos* into train/test with GroupShuffleSplit.
+4.  Standard-scale features (fit on train only).
+5.  Tune a small MLP (scikeras + GridSearchCV + early-stopping).
+6.  Save best model (.keras) and scaler (joblib).
+7.  Report frame-level test metrics.
+8.  Compute per-video boundary error on test set.
+"""
+# ──────────────────────────────────────────────────────────────────────
+# 0. Imports
+# ──────────────────────────────────────────────────────────────────────
+import warnings, os
+from pathlib import Path
+from collections import defaultdict
+
+import numpy   as np
+import pandas  as pd
+
+from sklearn.model_selection import GroupShuffleSplit, GridSearchCV
+from sklearn.preprocessing    import StandardScaler
+from sklearn.metrics          import (precision_score, recall_score, f1_score,
+                                      classification_report, make_scorer)
+from scikeras.wrappers        import KerasClassifier
+
 import tensorflow as tf
 from tensorflow import keras
-from pathlib import Path
+from tensorflow.keras.callbacks import EarlyStopping
+import joblib
 
-from pathlib import Path
-import numpy as np
-import pandas as pd
 
-full_dir    = Path(r"ML/data/output_poses")
-trimmed_dir = Path(r"ML/data/output_poses_preprocessed")
+# ──────────────────────────────────────────────────────────────────────
+# 1. Data loading  ➜  X_processed, y_frames, video_ids, offsets
+# ──────────────────────────────────────────────────────────────────────
+full_dir    = Path("ML/data/output_poses")
+trimmed_dir = Path("ML/data/output_poses_preprocessed")
 
-X_processed_flat, y_frames, video_ids = [], [], []
-offsets = {}            # key → (start_idx, end_idx) in X_processed_flat
+X_parts, y_parts, video_ids = [], [], []
+offsets, cursor = {}, 0                       # keep slice of each video
 
-def smooth_sequence(seq, window=5):
+
+def smooth_sequence(seq: np.ndarray, window: int = 5) -> np.ndarray:
+    """Moving-average smoothing along time axis."""
     pad = window // 2
-    seq_padded = np.pad(seq, ((pad, pad), (0, 0)), mode='edge')
-    out = np.empty_like(seq)
-    for i in range(len(seq)):
-        out[i] = seq_padded[i:i+window].mean(axis=0)
-    return out
+    padded = np.pad(seq, ((pad, pad), (0, 0)), mode="edge")
+    return np.stack([padded[i:i + window].mean(axis=0)
+                     for i in range(len(seq))])
 
-full_files = sorted(full_dir.glob("*.csv"))
-cursor = 0
-for full_path in full_files:
-    key = full_path.stem
-    trim_path = trimmed_dir / f"{key}.csv"
+
+for full_path in sorted(full_dir.glob("*.csv")):
+    vid = full_path.stem
+    trim_path = trimmed_dir / f"{vid}.csv"
     if not trim_path.exists():
-        print(f"⚠️  {key}: trimmed file missing – skipped.")
-        continue
+        print(f"⚠️  {vid}: trimmed file missing — skipped."); continue
 
     df_full = pd.read_csv(full_path).sort_values("FrameNo")
     df_trim = pd.read_csv(trim_path).sort_values("FrameNo")
     if df_full.empty or df_trim.empty:
-        print(f"⚠️  {key}: empty CSV – skipped.")
-        continue
+        print(f"⚠️  {vid}: empty CSV — skipped."); continue
 
-    # Label frames
+    # frame labels: 1 inside trimmed range, else 0
     start_fno, end_fno = df_trim["FrameNo"].iloc[[0, -1]]
-    labels = df_full["FrameNo"].between(start_fno, end_fno).astype(int).to_numpy()
+    labels = df_full["FrameNo"].between(start_fno, end_fno).astype(int).values
 
     pose_cols = [c for c in df_full.columns if c != "FrameNo"]
-    raw_pose  = df_full[pose_cols].to_numpy(dtype=float)
+    raw_pose  = df_full[pose_cols].values.astype(float)
 
-    # Smoothing + delta features
-    smoothed = smooth_sequence(raw_pose, window=5)
-    deltas   = np.diff(smoothed, axis=0, prepend=smoothed[[0]])
-    features = np.hstack([smoothed, deltas])
+    smoothed  = smooth_sequence(raw_pose, window=5)
+    deltas    = np.diff(smoothed, axis=0, prepend=smoothed[[0]])
+    features  = np.hstack([smoothed, deltas])
 
-    X_processed_flat.append(features)
-    y_frames.append(labels)
-    video_ids.extend([key]*len(labels))
-
-    offsets[key] = (cursor, cursor + len(features))  # record slice for later
+    X_parts.append(features)
+    y_parts.append(labels)
+    video_ids.extend([vid] * len(labels))
+    offsets[vid] = (cursor, cursor + len(features))
     cursor += len(features)
 
-    print(f"✅ {key}: {labels.sum()} exercise frames of {len(labels)} total.")
+    print(f"✅ {vid}: {labels.sum()} exercise frames of {len(labels)} total.")
 
-if not X_processed_flat:
+if not X_parts:
     raise RuntimeError("No valid video pairs found.")
 
-X_processed = np.vstack(X_processed_flat)   # (N_frames, D_feat)
-y_frames    = np.concatenate(y_frames)      # (N_frames,)
+X_processed = np.vstack(X_parts)          # (N_frames, D_feat)
+y_frames    = np.concatenate(y_parts)     # (N_frames,)
+video_ids   = np.array(video_ids)         # (N_frames,)
 
-# Now X_processed and y_frames are aligned.
-# Standardize features
-scaler = StandardScaler()
-# Split train/test by video before fitting scaler, to avoid leaking test info in scaler.
-train_idx, test_idx = train_test_split(np.arange(len(video_ids)), test_size=0.2, shuffle=True, 
-                                       stratify=video_ids)  # stratify by video id so each split has some frames from each video; 
-                                                             # alternatively, split by unique videos for a stricter separation.
-X_train = X_processed[train_idx]
-X_test = X_processed[test_idx]
-y_train = y_frames[train_idx]
-y_test = y_frames[test_idx]
 
-scaler.fit(X_train)
+# ──────────────────────────────────────────────────────────────────────
+# 2. Train/test split (grouped by video)
+# ──────────────────────────────────────────────────────────────────────
+gss = GroupShuffleSplit(n_splits=1, test_size=0.20, random_state=42)
+train_idx, test_idx = next(gss.split(X_processed, y_frames, groups=video_ids))
+
+train_videos = np.unique(video_ids[train_idx])
+test_videos  = np.unique(video_ids[test_idx])
+print(f"\nTrain videos: {len(train_videos)}   |   Test videos: {len(test_videos)}")
+
+X_train, y_train = X_processed[train_idx], y_frames[train_idx]
+X_test,  y_test  = X_processed[test_idx],  y_frames[test_idx]
+
+scaler = StandardScaler().fit(X_train)     # no leakage
 X_train = scaler.transform(X_train)
-X_test = scaler.transform(X_test)
+X_test  = scaler.transform(X_test)
 
-# 3. Build Keras Model (Fully Connected Binary Classifier)
-def create_model(hidden_units=64, hidden_layers=1, dropout_rate=0.0, learning_rate=1e-3):
-    model = keras.Sequential()
-    model.add(keras.layers.Input(shape=(X_train.shape[1],)))
-    # Add hidden layers
+
+# ──────────────────────────────────────────────────────────────────────
+# 3. Model definition & hyper-parameter search
+# ──────────────────────────────────────────────────────────────────────
+def create_model(hidden_units=64, hidden_layers=1,
+                 dropout_rate=0.0, learning_rate=1e-3):
+    m = keras.Sequential([keras.layers.Input(shape=(X_train.shape[1],))])
     for _ in range(hidden_layers):
-        model.add(keras.layers.Dense(hidden_units, activation='relu'))
-        if dropout_rate > 0:
-            model.add(keras.layers.Dropout(dropout_rate))
-    # Output layer for binary classification
-    model.add(keras.layers.Dense(1, activation='sigmoid'))
-    # Compile model
-    model.compile(optimizer=keras.optimizers.Adam(learning_rate=learning_rate),
-                  loss='binary_crossentropy',
-                  metrics=['accuracy'])
-    return model
+        m.add(keras.layers.Dense(hidden_units, activation="relu"))
+        if dropout_rate:
+            m.add(keras.layers.Dropout(dropout_rate))
+    m.add(keras.layers.Dense(1, activation="sigmoid"))
+    m.compile(optimizer=keras.optimizers.Adam(learning_rate),
+              loss="binary_crossentropy",
+              metrics=["accuracy"])
+    return m
 
-# Wrap the model with scikeras KerasClassifier for use in GridSearchCV
-clf = KerasClassifier(model=create_model, verbose=0)  # we will set parameters via param_grid
 
-# 4. Hyperparameter Tuning with GridSearchCV
+early = EarlyStopping(monitor="loss", patience=5, restore_best_weights=True)
+
+clf = KerasClassifier(model=create_model, verbose=0, callbacks=[early])
+
 param_grid = {
-    "model__hidden_units": [64],        # number of neurons in each hidden layer
-    "model__hidden_layers": [5],          # number of hidden layers
-    "model__dropout_rate": [0.3],       # dropout to test (0 for none, 0.3 as an example)
-    "model__learning_rate": [1e-4],    # a couple of learning rates to try
-    "epochs": [20],   # you can increase this; using 20 for speed in example
-    "batch_size": [32] 
+    "model__hidden_units":  [256],
+    "model__hidden_layers": [12],
+    "model__dropout_rate":  [0.30],
+    "model__learning_rate": [1e-4],
+    "epochs":     [50],
+    "batch_size": [64],
 }
-# We use F1-score for selecting the best model. We'll define a scorer for binary F1.
-from sklearn.metrics import make_scorer, f1_score
-f1_scorer = make_scorer(f1_score)
 
-grid = GridSearchCV(estimator=clf, param_grid=param_grid, scoring=f1_scorer, cv=3, n_jobs=-1, verbose=10)
+grid = GridSearchCV(clf, param_grid,
+                    scoring=make_scorer(f1_score),
+                    cv=3, n_jobs=-1, verbose=10)
 grid.fit(X_train, y_train)
 
-print("Best hyperparameters:", grid.best_params_)
-best_model = grid.best_estimator_.model_  # Keras model from best estimator
+best_model = grid.best_estimator_.model_
+print("\nBest hyper-parameters →", grid.best_params_)
 
-# 5. Evaluate on Test Data
-y_pred_prob = best_model.predict(X_test).reshape(-1)  # predict probabilities
-y_pred = (y_pred_prob >= 0.5).astype(int)             # threshold at 0.5 for binary predictions
 
-print("Test Precision:", precision_score(y_test, y_pred))
-print("Test Recall:", recall_score(y_test, y_pred))
-print("Test F1-score:", f1_score(y_test, y_pred))
-print("\nClassification Report:\n", classification_report(y_test, y_pred, digits=3))
+# ──────────────────────────────────────────────────────────────────────
+# 4. Persist model + scaler
+# ──────────────────────────────────────────────────────────────────────
+Path("models").mkdir(exist_ok=True)
+best_model.save("models/boundary_model.keras")
+joblib.dump(scaler, "models/scaler.pkl")
+print("✅ Model saved to   models/boundary_model.keras")
+print("✅ Scaler saved to  models/scaler.pkl")
 
-# 6. Post-processing to get start and end frame indices for each video in test set
-# Here we show how to derive start/end for one video sequence. In practice, loop over test videos.
-unique_test_videos = set([video_ids[i] for i in test_idx])
-for vid in unique_test_videos:
-    start, end = offsets[vid]          # indices in X_processed
-    features_scaled = scaler.transform(X_processed[start:end])
-    pred_prob  = best_model.predict(features_scaled).ravel()
-    pred_labels = (pred_prob >= 0.5).astype(int)
-    segments = []
-    in_segment = False
-    seg_start = 0
-    for i, lbl in enumerate(pred_labels):
-        if lbl == 1 and not in_segment:
-            in_segment = True
-            seg_start = i
-        if lbl == 0 and in_segment:
-            # segment ended at i-1
-            segments.append((seg_start, i-1))
-            in_segment = False
-    if in_segment:
-        segments.append((seg_start, len(pred_labels)-1))
 
-    if len(segments) == 0:
-        print(f"No exercise detected in video {vid}")
-    else:
-        # Choose the longest segment as the exercise
-        seg_lengths = [e - s + 1 for (s, e) in segments]
-        best_idx = np.argmax(seg_lengths)
-        start_frame, end_frame = segments[best_idx]
-        print(f"Video {vid}: Predicted exercise segment from frame {start_frame} to {end_frame}")
-        # If needed, you can compare with true start/end from the labels for this video.
+# ──────────────────────────────────────────────────────────────────────
+# 5. Frame-level metrics on test set
+# ──────────────────────────────────────────────────────────────────────
+y_pred_prob = best_model.predict(X_test).ravel()
+y_pred      = (y_pred_prob >= 0.5).astype(int)
+
+print("\n──────── Frame-level test metrics ────────")
+print("Precision :", precision_score(y_test, y_pred))
+print("Recall    :", recall_score(y_test,  y_pred))
+print("F1-score  :", f1_score(y_test,     y_pred))
+print("\n", classification_report(y_test, y_pred, digits=3))
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 6. Boundary-error evaluation (only unseen videos)
+# ──────────────────────────────────────────────────────────────────────
+print("\n──────── Per-video boundary error (test set) ────────")
+
+delta_start, delta_end = [], []
+
+for vid in test_videos:
+    s, e = offsets[vid]
+    gt   = y_frames[s:e]
+
+    if gt.sum() == 0:                       # no positives: skip
+        warnings.warn(f"{vid}: all-negative — skipped.")
+        continue
+
+    true_start = int(np.argmax(gt == 1))
+    true_end   = int(len(gt) - 1 - np.argmax(gt[::-1] == 1))
+
+    X_vid     = scaler.transform(X_processed[s:e])
+    pred_prob = best_model.predict(X_vid).ravel()
+    pred_lbl  = (pred_prob >= 0.5).astype(int)
+
+    # Remove 1-frame glitches with simple majority filter
+    for i in range(1, len(pred_lbl) - 1):
+        if pred_lbl[i-1] == pred_lbl[i+1] != pred_lbl[i]:
+            pred_lbl[i] = pred_lbl[i-1]
+
+    # Longest contiguous 1-segment
+    segments, in_seg, s0 = [], False, 0
+    for i, lab in enumerate(pred_lbl):
+        if lab and not in_seg:
+            in_seg, s0 = True, i
+        if (not lab and in_seg):
+            segments.append((s0, i-1)); in_seg = False
+    if in_seg:
+        segments.append((s0, len(pred_lbl)-1))
+
+    if not segments:
+        print(f"{vid}: ❌ no segment predicted"); continue
+
+    seg_len = [e2 - s2 + 1 for s2, e2 in segments]
+    pred_start, pred_end = segments[int(np.argmax(seg_len))]
+
+    d_s, d_e = pred_start - true_start, pred_end - true_end
+    delta_start.append(d_s); delta_end.append(d_e)
+
+    print(f"{vid}:  GT[{true_start:>4}, {true_end:>4}]  |  "
+          f"Pred[{pred_start:>4}, {pred_end:>4}]  "
+          f"→ Δstart {d_s:+4d}  Δend {d_e:+4d}")
+
+# Aggregate boundary error
+if delta_start:
+    ds, de = np.array(delta_start), np.array(delta_end)
+    print("\n──────── Aggregate boundary error ────────")
+    print(f"Δstart  mean {ds.mean():+6.2f} ± {ds.std():.2f}   "
+          f"median |Δ| {np.median(np.abs(ds)):.1f} frames")
+    print(f"Δend    mean {de.mean():+6.2f} ± {de.std():.2f}   "
+          f"median |Δ| {np.median(np.abs(de)):.1f} frames")
+else:
+    print("No boundary stats (model predicted no positives).")

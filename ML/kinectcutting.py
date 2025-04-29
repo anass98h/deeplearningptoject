@@ -1,218 +1,313 @@
-from pathlib import Path
+# ======================================================================
+# 0.  IMPORTS
+# ======================================================================
+import os, re, warnings
 import numpy as np
 import pandas as pd
 
-DIR_POSE   = Path("ML/data/output_poses")
-DIR_KINECT = Path("ML/data/kinect_good_preprocessed")
+from sklearn.model_selection    import GroupShuffleSplit, GridSearchCV
+from sklearn.preprocessing      import StandardScaler
+from sklearn.utils.class_weight import compute_class_weight
+from sklearn.metrics            import make_scorer, f1_score
 
-def xy_columns(df: pd.DataFrame) -> list[str]:
-    """Return columns that end with '_x' or '_y' (order preserved)."""
-    return [c for c in df.columns if c.endswith(("_x", "_y"))]
-
-X_chunks, y_chunks = [], []
-
-for pose_path in sorted(DIR_POSE.glob("*.csv")):
-    key      = pose_path.stem
-    kin_path = DIR_KINECT / f"{key}_kinect.csv"
-    if not kin_path.exists():
-        print(f"⚠️  {key}: missing sister file – skipped.")
-        continue
-
-    # ---------------- read & strip column whitespace ----------------
-    df_pose = pd.read_csv(pose_path)
-    df_pose.columns = df_pose.columns.str.strip()
-
-    df_kin  = pd.read_csv(kin_path)
-    df_kin.columns  = df_kin.columns.str.strip()
-
-    # ---------------- align on FrameNo ----------------
-    shared_frames = np.intersect1d(df_pose["FrameNo"], df_kin["FrameNo"])
-    if shared_frames.size == 0:
-        print(f"⚠️  {key}: no overlapping frames – skipped.")
-        continue
-
-    df_pose = df_pose[df_pose["FrameNo"].isin(shared_frames)].sort_values("FrameNo")
-    df_kin  = df_kin [df_kin ["FrameNo"].isin(shared_frames)].sort_values("FrameNo")
-
-    if not np.array_equal(df_pose["FrameNo"].values, df_kin["FrameNo"].values):
-        print(f"⚠️  {key}: frame mismatch after alignment – skipped.")
-        continue
-
-    # ---------------- collect xy columns ----------------
-    pose_xy_cols = xy_columns(df_pose)
-
-    missing = [c for c in pose_xy_cols if c not in df_kin.columns]
-    if missing:
-        print(f"⚠️  {key}: Kinect file missing {len(missing)} XY columns – skipped.")
-        continue
-
-    X_chunks.append(df_pose[pose_xy_cols].to_numpy(dtype=float))
-    y_chunks.append(df_kin [pose_xy_cols].to_numpy(dtype=float))
-
-    print(f"✅  {key}: kept {len(df_pose)} frames.")
-
-# ---------------- stack everything ----------------
-if not X_chunks:
-    raise RuntimeError("No valid file pairs were found – nothing to train on.")
-
-features = np.vstack(X_chunks)
-targets  = np.vstack(y_chunks)
-
-print("\n🎯  Finished:")
-print("    features :", features.shape)
-print("    targets  :", targets.shape)
-
-#!/usr/bin/env python3
-"""
-train_xy_to_xy_grid.py
-----------------------
-PoseNet XY  ➜  Kinect  XY
-Adds:
-    • tqdm progress‑bar for GridSearchCV
-    • prints best parameters neatly
-    • saves model as .keras (Keras v3 format)
-"""
-
-# ------------------------------------------------------------------ #
-# 0. Imports & reproducibility                                       #
-# ------------------------------------------------------------------ #
-import numpy as np
 import tensorflow as tf
-import keras
-from sklearn.model_selection import train_test_split, GridSearchCV, ParameterGrid
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import make_scorer, mean_squared_error
+from keras import layers, models, callbacks
+
+from scikeras.wrappers import KerasClassifier
 from joblib import dump
-import warnings, os
-from sklearn.metrics import mean_squared_error, mean_absolute_error
+# ----------------------------------------------------------------------
+
+# ======================================================================
+# 1.  LOAD & SPLIT
+# ======================================================================
+def load_squat_binary_matched(uncut_dir, cut_dir):
+    uncut   = {f for f in os.listdir(uncut_dir) if f.endswith("_kinect.csv")}
+    cut     = {f for f in os.listdir(cut_dir)   if f.endswith("_kinect.csv")}
+    matched = sorted(uncut & cut, key=lambda f: re.match(r'^([A-Z])(\d+)', f).groups())
+
+    X_parts, y_parts, groups = [], [], []
+    for fn in matched:
+        df_full = pd.read_csv(os.path.join(uncut_dir, fn))
+        df_cut  = pd.read_csv(os.path.join(cut_dir,   fn))
+        cut_set = set(df_cut["FrameNo"])
+        X_parts.append(df_full.drop(columns=["FrameNo"]))
+        y_parts.append(df_full["FrameNo"].isin(cut_set).astype(int))
+        groups.extend([fn] * len(df_full))
+
+    X = pd.concat(X_parts, ignore_index=True)
+    y = pd.concat(y_parts, ignore_index=True)
+    return X, y, np.array(groups)
+
+UNCUT = "ML/data/kinect_good"
+CUT   = "ML/data/kinect_good_preprocessed"
+
+X, y, groups = load_squat_binary_matched(UNCUT, CUT)
+print(f"Total frames: {len(y)}, sequences: {len(np.unique(groups))}")
+
+gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
+train_idx, test_idx = next(gss.split(X, y, groups))
+
+X_train, y_train, groups_train = X.iloc[train_idx], y.iloc[train_idx], groups[train_idx]
+X_test,  y_test,  groups_test  = X.iloc[test_idx],  y.iloc[test_idx],  groups[test_idx]
+
+# strip accidental whitespace in column names
+X_train.columns = X_train.columns.str.strip()
+X_test.columns  = X_test.columns.str.strip()
 
 
-warnings.filterwarnings("ignore", category=UserWarning)
-tf.random.set_seed(42)
-np.random.seed(42)
+# ======================================================================
+# 2.  DATA-AUGMENTATION (mirror + rotate)
+# ======================================================================
+JOINT_PAIRS = [
+    ("left_shoulder","right_shoulder"),
+    ("left_elbow",   "right_elbow"),
+    ("left_hand",    "right_hand"),
+    ("left_hip",     "right_hip"),
+    ("left_knee",    "right_knee"),
+    ("left_foot",    "right_foot"),
+]
 
-# ------------------------------------------------------------------ #
-# 1. Load the arrays produced earlier                                #
-# ------------------------------------------------------------------ #
-#  If you saved them before:
-# features, targets = np.load("xy_arrays.npz")["features"], np.load("xy_arrays.npz")["targets"]
-#  Here we assume they’re still defined in memory:
-X = features.copy()
-y = targets.copy()
+def mirror_df(df):
+    m = df.copy()
+    for c in m.columns:
+        if c.endswith("_x"):
+            m[c] = -m[c]
+    for L, R in JOINT_PAIRS:
+        for axis in ("x","y","z"):
+            lcol, rcol = f"{L}_{axis}", f"{R}_{axis}"
+            if lcol in m and rcol in m:
+                m[lcol], m[rcol] = m[rcol].copy(), m[lcol].copy()
+    return m
 
-# ------------------------------------------------------------------ #
-# 2.  CONFIG SECTION                                                 #
-# ------------------------------------------------------------------ #
-USE_SCALER = True           # flip to False to disable StandardScaler
-PATIENCE   = 10             # EarlyStopping patience
-MAX_EPOCHS = 200            # hard cap; EarlyStopping usually ends sooner
+def rotate_df(df, angle):
+    r = df.copy()
+    c, s = np.cos(angle), np.sin(angle)
+    for col in r.columns:
+        if col.endswith("_x"):
+            base = col[:-2]
+            xcol, zcol = f"{base}_x", f"{base}_z"
+            if zcol in r:
+                x, z = df[xcol].values, df[zcol].values
+                r[xcol] = c*x - s*z
+                r[zcol] = s*x + c*z
+    return r
 
+aug_X = [X_train]
+aug_y = [y_train]
+aug_g = [groups_train]
+
+aug_X.append(mirror_df(X_train));       aug_y.append(y_train.copy()); aug_g.append(groups_train.copy())
+for ang in (np.deg2rad(15), np.deg2rad(-15)):
+    aug_X.append(rotate_df(X_train, ang)); aug_y.append(y_train.copy()); aug_g.append(groups_train.copy())
+
+X_train_aug       = pd.concat(aug_X, ignore_index=True)
+y_train_aug       = pd.concat(aug_y, ignore_index=True)
+groups_train_aug  = np.concatenate(aug_g)
+
+print("Train frames before aug:", len(X_train))
+print("Train frames after  aug:", len(X_train_aug))
+
+
+# ======================================================================
+# 3.  SLIDING-WINDOWS
+# ======================================================================
+WINDOW = 11
+HALF   = WINDOW // 2
+
+def build_windows(X_df, y_arr, g_arr):
+    X_np = X_df.values
+    X_win, y_win, centre_global_idx = [], [], []
+    for i in range(HALF, len(X_np) - HALF):
+        if np.all(g_arr[i-HALF : i+HALF+1] == g_arr[i]):
+            X_win.append(X_np[i-HALF : i+HALF+1].ravel())
+            y_win.append(y_arr[i])
+            centre_global_idx.append(i)
+    return np.stack(X_win), np.array(y_win), np.array(centre_global_idx)
+
+X_win,      y_win,      centre_idx_train = build_windows(
+    X_train_aug, y_train_aug.values, groups_train_aug
+)
+X_test_win, y_test_win, centre_idx_test  = build_windows(
+    X_test, y_test.values, groups_test
+)
+
+print(f"Windowed data — train: {X_win.shape}, test: {X_test_win.shape}")
+
+
+# ======================================================================
+# 4.  SCALING & CLASS-WEIGHTS
+# ======================================================================
+scaler  = StandardScaler().fit(X_win)
+X_tr    = scaler.transform(X_win)
+X_te    = scaler.transform(X_test_win)
+
+classes = np.unique(y_win)
+cw      = compute_class_weight(class_weight="balanced",
+                               classes=classes,
+                               y=y_win)
+class_weight = dict(zip(classes, cw))
+
+
+# ======================================================================
+# 5.  MODEL FACTORY (parametrized for grid search)
+# ======================================================================
+def build_model(n_layers=2, units=64, learning_rate=0.001):
+    m = models.Sequential()
+    m.add(layers.Input(shape=(X_tr.shape[1],)))
+    for _ in range(n_layers):
+        m.add(layers.Dense(units, activation="relu"))
+    m.add(layers.Dense(1, activation="sigmoid"))
+    m.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
+        loss="binary_crossentropy",
+        metrics=[
+            "accuracy",
+            tf.keras.metrics.Precision(name="precision"),
+            tf.keras.metrics.Recall(name="recall")
+        ]
+    )
+    return m
+
+
+# ======================================================================
+# 6.  GRID SEARCH CV
+# ======================================================================
 param_grid = {
-    "model__units":        [128],
-    "model__n_hidden":     [10],
-    "batch_size":   [128],
-    "model__learning_rate":[0.001],
+    "model__n_layers":          [2, 3],              # medium vs. slightly deeper net
+    "model__units":             [64, 128],           # moderate vs. higher capacity
+    "optimizer__learning_rate": [1e-3, 5e-4],        # standard Adam LR vs. a smaller step
+    "batch_size":               [64, 128],           # small vs. medium batches
+    "epochs":                   [50, 100],           # enough to converge vs. extra training
 }
 
-# ------------------------------------------------------------------ #
-# 3. Optional scaling                                                #
-# ------------------------------------------------------------------ #
-if USE_SCALER:
-    X_scaler = StandardScaler().fit(X)
-    y_scaler = StandardScaler().fit(y)
-    X = X_scaler.transform(X)
-    y = y_scaler.transform(y)
-else:
-    X_scaler = y_scaler = None
-
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.10, random_state=42
+early_stop = callbacks.EarlyStopping(
+    monitor="val_loss", patience=5, restore_best_weights=True
 )
 
-# ------------------------------------------------------------------ #
-# 4.  Model factory and KerasRegressor wrapper                       #
-# ------------------------------------------------------------------ #
-def build_model(units=128, n_hidden=2, learning_rate=0.001):
-    model = keras.Sequential([keras.layers.Input(shape=(26,))])
-    for _ in range(n_hidden):
-        model.add(keras.layers.Dense(units, activation='relu'))
-    model.add(keras.layers.Dense(26))         # linear output
-    model.compile(
-        optimizer=keras.optimizers.Adam(learning_rate=learning_rate),
-        loss='mse',
-        metrics=['mae']
-    )
-    return model
-
-from scikeras.wrappers import KerasRegressor
-reg = KerasRegressor(model=build_model, epochs=MAX_EPOCHS, verbose=0)
-
-early_stop = keras.callbacks.EarlyStopping(
-    monitor="val_loss", patience=PATIENCE, restore_best_weights=True
+reg = KerasClassifier(
+    model=build_model,
+    validation_split=0.1,
+    callbacks=[early_stop],
+    verbose=0
 )
 
-neg_mse = make_scorer(mean_squared_error, greater_is_better=False)
+f1_scorer = make_scorer(f1_score)
 
 grid = GridSearchCV(
     estimator=reg,
     param_grid=param_grid,
-    scoring=neg_mse,
-    cv=10,
+    scoring=f1_scorer,
+    cv=5,
     n_jobs=-1,
     refit=True,
-    verbose=10,                 # we’ll drive output via tqdm instead
+    verbose=3
 )
 
-# ------------------------------------------------------------------ #
-# 5.  Run Grid‑search with progress‑bar                              #
-# ------------------------------------------------------------------ #
+print(f"\n⏳ Running GridSearchCV over {np.prod([len(v) for v in param_grid.values()])} configs × {grid.cv}-fold CV\n")
+grid_result = grid.fit(X_tr, y_win)
 
-print(f"⏳  Running GridSearchCV with {len(ParameterGrid(param_grid))} configs × {grid.cv}‑fold CV\n")
-grid_result = grid.fit(
-    X_train, y_train,
-    validation_split=0.1,
-    callbacks=[early_stop],
-)
-# ------------------------------------------------------------------ #
-# 6.  Report best parameters                                         #
-# ------------------------------------------------------------------ #
-print("\n🏆  Best hyper‑parameters:")
+print("\n🏆 Best hyper-parameters:")
 for k, v in grid_result.best_params_.items():
-    print(f"   • {k:12s}: {v}")
-print("Best CV MSE :", -grid_result.best_score_)
+    print(f"   • {k:20s}: {v}")
+print("Best CV F1-score :", grid_result.best_score_)
 
 best_model = grid_result.best_estimator_.model_
 
-# ------------------------------------------------------------------ #
-# 7. Evaluate on held-out test set                                  #
-# ------------------------------------------------------------------ #
-test_mse, test_mae = best_model.evaluate(X_test, y_test, verbose=0)
 
-# Inverse-transform and recompute in original units
-y_pred_scaled = best_model.predict(X_test)
-y_test_orig   = y_scaler.inverse_transform(y_test)
-y_pred_orig   = y_scaler.inverse_transform(y_pred_scaled)
+# ======================================================================
+# 7.  EVALUATION (use best_model)
+# ======================================================================
+loss, acc, prec, rec = best_model.evaluate(X_te, y_test_win, verbose=0)
+f1 = 2 * (prec * rec) / (prec + rec + 1e-8)
+print(f"\nWindowed-test → loss {loss:.4f}  acc {acc:.4f}  precision {prec:.4f}  recall {rec:.4f}  F1 {f1:.4f}")
 
-from sklearn.metrics import mean_squared_error, mean_absolute_error
 
-mse_orig = mean_squared_error(y_test_orig, y_pred_orig)
-mae_orig = mean_absolute_error(y_test_orig, y_pred_orig)
+# ======================================================================
+# 8.  BOUNDARY-ERROR EVALUATION
+# ======================================================================
+print("\n───────── Per-video boundary error ─────────")
+delta_start_list, delta_end_list = [], []
+per_video_results = {}
 
-print("\n📊 Scaled Test MSE :", test_mse)
-print("📊 Scaled Test MAE :", test_mae)
+unique_test_vids = np.unique(groups_test)
 
-print("\n📊 Original-scale Test MSE :", mse_orig)
-print("📊 Original-scale Test MAE :", mae_orig)
-# ------------------------------------------------------------------ #
-# 8.  Save artefacts                                                 #
-# ------------------------------------------------------------------ #
-best_model.save("xy_to_xy_best.keras")     # v3 format
-dump(grid_result.best_params_, "best_params.pkl")
+for vid in unique_test_vids:
+    frame_mask  = (groups_test == vid)
+    y_vid       = y_test.values[frame_mask]
+    X_vid_df    = X_test.loc[frame_mask]
+    n_frames = len(y_vid)
+    if y_vid.sum() == 0 or n_frames < WINDOW:
+        warnings.warn(f"{vid}: skipped (no positives or too short).")
+        continue
 
-if X_scaler is not None:
-    dump(X_scaler, "X_scaler.pkl")
-    dump(y_scaler, "y_scaler.pkl")
+    win_feats, centres = [], []
+    for idx in range(HALF, n_frames - HALF):
+        win_feats.append(X_vid_df.iloc[idx-HALF : idx+HALF+1].values.ravel())
+        centres.append(idx)
+
+    X_vid_win = scaler.transform(np.stack(win_feats))
+    pred_prob = best_model.predict(X_vid_win, verbose=0).ravel()
+    pred_lbl  = (pred_prob >= 0.5).astype(int)
+
+    frame_pred = np.zeros(n_frames, dtype=int)
+    for c_idx, lbl in zip(centres, pred_lbl):
+        frame_pred[c_idx] = lbl
+    for i in range(1, n_frames-1):
+        if frame_pred[i-1] == frame_pred[i+1] != frame_pred[i]:
+            frame_pred[i] = frame_pred[i-1]
+
+    true_start = int(np.argmax(y_vid == 1))
+    true_end   = int(n_frames - 1 - np.argmax(y_vid[::-1] == 1))
+
+    segments, in_seg = [], False
+    for i, l in enumerate(frame_pred):
+        if l == 1 and not in_seg:
+            in_seg, seg_start = True, i
+        if (l == 0 and in_seg) or (in_seg and i == n_frames-1):
+            seg_end = i-1 if l == 0 else i
+            segments.append((seg_start, seg_end))
+            in_seg = False
+
+    if not segments:
+        print(f"{vid}: ❌  no segment predicted")
+        continue
+
+    seg_lens = [e - s + 1 for s, e in segments]
+    idx_long = int(np.argmax(seg_lens))
+    pred_start, pred_end = segments[idx_long]
+
+    d_start = pred_start - true_start
+    d_end   = pred_end   - true_end
+    delta_start_list.append(d_start)
+    delta_end_list.append(d_end)
+    per_video_results[vid] = {
+        "true":  (true_start, true_end),
+        "pred":  (pred_start, pred_end),
+        "delta": (d_start, d_end)
+    }
+
+    print(f"{vid}:  GT [{true_start:>4}, {true_end:>4}]  |  "
+          f"Pred [{pred_start:>4}, {pred_end:>4}]  "
+          f"→  Δstart {d_start:+4d}  Δend {d_end:+4d}")
+
+if delta_start_list:
+    ds = np.array(delta_start_list); de = np.array(delta_end_list)
+    print("\n───────── Aggregate boundary error ─────────")
+    print(f"Δstart  mean {ds.mean():+6.2f} ± {ds.std():.2f}   "
+          f"median |Δ| {np.median(np.abs(ds)):.1f} frames")
+    print(f"Δend    mean {de.mean():+6.2f} ± {de.std():.2f}   "
+          f"median |Δ| {np.median(np.abs(de)):.1f} frames")
 else:
-    open("NO_SCALER_USED.txt", "w").close()
+    print("No boundary statistics (no positive predictions).")
 
-print("\n💾  Model saved to xy_to_xy_best.keras")
+
+# ======================================================================
+# 9.  SAVE ARTIFACTS
+# ======================================================================
+# Save the best model in Keras v3 format
+best_model.save("kinect_cutting_model.keras")
+
+# Save the input scaler
+dump(scaler, "kinect_cutting_scaler.pkl")
+
+print("\n💾  Model saved to kinect_cutting_model.keras")
