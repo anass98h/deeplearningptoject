@@ -14,6 +14,8 @@ from pathlib import Path
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 from fastapi.responses import PlainTextResponse
 from pathlib import Path
+import asyncio
+import random
 
 # Define the directory to save Json files
 POSENET_DATA = Path("posenet_data")
@@ -600,19 +602,16 @@ async def get_kinect_data():
     
 @app.post("/trim-frames", response_class=PlainTextResponse)
 async def trim_frames(file: UploadFile = File(...)):
-    """
-    Endpoint to trim redundant frames from a PoseNet CSV file.
-    Currently returns the pre-trimmed A1_kinect.csv file.
-    """
     try:
+
         # Path to the CSV file
-        csv_path = Path("./A1_kinect.csv")
+        csv_path = Path("./tests/output.csv")
         
         # Check if file exists
         if not csv_path.exists():
             raise HTTPException(
                 status_code=404,
-                detail="A1_kinect.csv file not found. Please place the file in the root directory.",
+                detail="output.csv file not found. Please place the file in the root directory.",
                 headers={"error_type": "file_not_found"}
             )
         
