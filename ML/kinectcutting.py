@@ -173,11 +173,11 @@ def build_model(n_layers=2, units=64, learning_rate=0.001):
 # 6.  GRID SEARCH CV
 # ======================================================================
 param_grid = {
-    "model__n_layers":          [2, 3],              # medium vs. slightly deeper net
-    "model__units":             [64, 128],           # moderate vs. higher capacity
-    "optimizer__learning_rate": [1e-3, 5e-4],        # standard Adam LR vs. a smaller step
-    "batch_size":               [64, 128],           # small vs. medium batches
-    "epochs":                   [50, 100],           # enough to converge vs. extra training
+    "model__n_layers":          [12],              # medium vs. slightly deeper net
+    "model__units":             [128],           # moderate vs. higher capacity
+    "optimizer__learning_rate": [1e-4],        # standard Adam LR vs. a smaller step
+    "batch_size":               [128],           # small vs. medium batches
+    "epochs":                   [50],           # enough to converge vs. extra training
 }
 
 early_stop = callbacks.EarlyStopping(

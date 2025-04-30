@@ -13,7 +13,7 @@ from tensorflow import keras
 # ── USER-CONFIGurable paths ───────────────────────────────────────
 MODEL_PATH   = "models/boundary_model.keras"   # your .keras model file
 SCALER_PATH  = "models/scaler.pkl"             # your saved StandardScaler
-INPUT_CSV    = "ML/data/output_poses/A1.csv"      # CSV with FrameNo + pose features
+INPUT_CSV    = "ML/data/output_poses/A83.csv"      # CSV with FrameNo + pose features
 OUTPUT_CSV   = "ML/data/predictions/predictions.csv"          # where to write probs+labels
 # ────────────────────────────────────────────────────────────────
 def smooth_sequence(seq, window=5):
