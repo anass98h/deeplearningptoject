@@ -131,11 +131,11 @@ early = EarlyStopping(monitor="loss", patience=5, restore_best_weights=True)
 clf = KerasClassifier(model=create_model, verbose=0, callbacks=[early])
 
 param_grid = {
-    "model__hidden_units":  [256],
-    "model__hidden_layers": [12],
+    "model__hidden_units":  [64],
+    "model__hidden_layers": [2],
     "model__dropout_rate":  [0.30],
     "model__learning_rate": [1e-4],
-    "epochs":     [50],
+    "epochs":     [5],
     "batch_size": [64],
 }
 
