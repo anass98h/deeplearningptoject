@@ -108,18 +108,6 @@ class PoseExtractor:
 
 
 def process_video(video_path, output_dir, sample_rate=1, model_type='lightning'):
-    """
-    Extract poses from video using MoveNet
-    
-    Args:
-        video_path: Path to the input AVI file
-        output_dir: Directory to save the outputs
-        sample_rate: Process every Nth frame (default: 1 - process every frame)
-        model_type: Type of MoveNet model to use ('lightning' or 'thunder')
-        
-    Returns:
-        DataFrame with pose keypoints for each processed frame
-    """
 
     base_name = os.path.splitext(os.path.basename(video_path))[0]
     
@@ -222,7 +210,7 @@ def batch_process_videos(video_dir, output_dir="output_poses", extension=".avi",
 
 
 if __name__ == "__main__":
-    # Process a single video
+    # Process a single video, this is what are are going to use for the pipeline
     # process_video("path/to/your/video.avi", "output_poses", sample_rate=1, model_type='lightning')
     
     # Process all videos in a directory
