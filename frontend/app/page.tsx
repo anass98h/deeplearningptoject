@@ -51,7 +51,7 @@ export default function Dashboard() {
               value="video-trimmer"
               className="rounded-md data-[state=active]:bg-white data-[state=active]:shadow-md transition-all duration-200"
             >
-              Video Trimmer
+              Visualize Video
             </TabsTrigger>
           </TabsList>
 
@@ -109,7 +109,7 @@ export default function Dashboard() {
             <Card className="border-0 shadow-xl overflow-hidden">
               <CardHeader className="border-b border-gray-100 bg-white px-6 py-4">
                 <CardTitle className="text-xl font-semibold text-gray-800">
-                  Video Trimmer
+                  Visualize Video
                 </CardTitle>
                 <CardDescription className="text-gray-500 mt-1">
                   Upload a video file to process motion data and visualize
