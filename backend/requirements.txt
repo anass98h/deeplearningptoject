@@ -9,3 +9,5 @@ tensorflow==2.19.0
 uvicorn==0.34.0
 python-multipart==0.0.20
 httpx==0.28.1
+kagglehub>=0.2.0
+opencv-python>=4.5.5
