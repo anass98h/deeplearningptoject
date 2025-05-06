@@ -6,11 +6,10 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { CSVPrediction } from "@/components/csv-prediction";
-import PoseNetPrediction from "@/components/posenet-prediction";
-import { FrameTrimmer } from "@/components/FrameTrimmer";
-import { VideoFrameTrimmer } from "@/components/VideoFrameTrimmer";
-
+// import { CSVPrediction } from "@/components/csv-prediction";
+// import PoseNetPrediction from "@/components/posenet-prediction";
+// import { FrameTrimmer } from "@/components/FrameTrimmer";
+import { VideoTrimmer } from "@/components/VideoTrimmer";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -28,9 +27,9 @@ export default function Dashboard() {
           </p>
         </div>
 
-        <Tabs defaultValue="csv" className="w-full">
-          <TabsList className="grid w-full max-w-xl grid-cols-4 mb-8 p-1 bg-gray-100 rounded-lg">
-            <TabsTrigger
+        <Tabs defaultValue="video-trimmer" className="w-full">
+          <TabsList className="grid w-full max-w-md grid-cols-4 mb-8 p-1 bg-gray-100 rounded-lg">
+            {/* <TabsTrigger
               value="csv"
               className="rounded-md data-[state=active]:bg-white data-[state=active]:shadow-md transition-all duration-200"
             >
@@ -47,16 +46,16 @@ export default function Dashboard() {
               className="rounded-md data-[state=active]:bg-white data-[state=active]:shadow-md transition-all duration-200"
             >
               Frame Trimmer
-            </TabsTrigger>
+            </TabsTrigger> */}
             <TabsTrigger
-              value="video"
+              value="video-trimmer"
               className="rounded-md data-[state=active]:bg-white data-[state=active]:shadow-md transition-all duration-200"
             >
-              Video Analysis
+              Video Trimmer
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="csv" className="mt-0">
+          {/* <TabsContent value="csv" className="mt-0">
             <Card className="border-0 shadow-xl overflow-hidden">
               <CardHeader className="border-b border-gray-100 bg-white px-6 py-4">
                 <CardTitle className="text-xl font-semibold text-gray-800">
@@ -104,20 +103,21 @@ export default function Dashboard() {
                 <FrameTrimmer />
               </CardContent>
             </Card>
-          </TabsContent>
+          </TabsContent> */}
 
-          <TabsContent value="video" className="mt-0">
+          <TabsContent value="video-trimmer" className="mt-0">
             <Card className="border-0 shadow-xl overflow-hidden">
               <CardHeader className="border-b border-gray-100 bg-white px-6 py-4">
                 <CardTitle className="text-xl font-semibold text-gray-800">
-                  Video Analysis
+                  Video Trimmer
                 </CardTitle>
                 <CardDescription className="text-gray-500 mt-1">
-                  Upload a video file for pose estimation and frame analysis.
+                  Upload a video file to process motion data and visualize
+                  trimmed results.
                 </CardDescription>
               </CardHeader>
               <CardContent className="p-6">
-                <VideoFrameTrimmer />
+                <VideoTrimmer />
               </CardContent>
             </Card>
           </TabsContent>
