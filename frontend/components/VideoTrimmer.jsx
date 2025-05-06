@@ -356,10 +356,11 @@ export function VideoTrimmer() {
               return (
                 <div
                   key={index}
-                  className={`h-full border-r border-white ${isKept
+                  className={`h-full border-r border-white ${
+                    isKept
                       ? "bg-green-200 hover:bg-green-300"
                       : "bg-red-200 hover:bg-red-300"
-                    } ${isCurrentFrame ? "ring-2 ring-blue-500 ring-inset" : ""}`}
+                  } ${isCurrentFrame ? "ring-2 ring-blue-500 ring-inset" : ""}`}
                   style={{
                     width: `${((blockSize || 1) / originalData.length) * 100}%`,
                     cursor: "pointer",
@@ -375,8 +376,9 @@ export function VideoTrimmer() {
           <div
             className="absolute top-0 w-1 h-10 bg-blue-600"
             style={{
-              left: `${(currentFrame / Math.max(1, originalData.length - 1)) * 100
-                }%`,
+              left: `${
+                (currentFrame / Math.max(1, originalData.length - 1)) * 100
+              }%`,
               transform: "translateX(-50%)",
             }}
           />
@@ -398,14 +400,16 @@ export function VideoTrimmer() {
     return (
       <div className="mt-2 flex justify-center">
         <Badge
-          className={`px-3 py-1 ${isKept
+          className={`px-3 py-1 ${
+            isKept
               ? "bg-green-100 text-green-800 border-green-200"
               : "bg-red-100 text-red-800 border-red-200"
-            }`}
+          }`}
         >
           {isKept
-            ? `Frame kept (Kinect 3D #${currentFrame + 1} → Trimmed #${trimmedIndex + 1
-            })`
+            ? `Frame kept (Kinect 3D #${currentFrame + 1} → Trimmed #${
+                trimmedIndex + 1
+              })`
             : `Frame removed (Kinect 3D #${currentFrame + 1})`}
         </Badge>
       </div>
@@ -481,8 +485,9 @@ export function VideoTrimmer() {
             <Button
               variant="outline"
               onClick={toggleAutoRotate}
-              className={`transition-all duration-200 ${autoRotate ? "bg-blue-100 text-blue-700" : "hover:bg-blue-50"
-                }`}
+              className={`transition-all duration-200 ${
+                autoRotate ? "bg-blue-100 text-blue-700" : "hover:bg-blue-50"
+              }`}
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -689,10 +694,10 @@ export function VideoTrimmer() {
                   Trimmed: {trimmedData.length} frames (
                   {originalData.length > 0
                     ? Math.round(
-                      ((originalData.length - trimmedData.length) /
-                        originalData.length) *
-                      100
-                    )
+                        ((originalData.length - trimmedData.length) /
+                          originalData.length) *
+                          100
+                      )
                     : 0}
                   % removed)
                 </Badge>
