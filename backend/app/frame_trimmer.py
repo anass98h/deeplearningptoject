@@ -13,30 +13,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def calculate_distance(df, joint1_base, joint2_base):
-    """
-    Calculates the Euclidean distance between two joints.
-
-    Args:
-        df (pd.DataFrame): DataFrame containing joint coordinates.
-        joint1_base (str): Base name of the first joint (e.g., "left_shoulder").
-        joint2_base (str): Base name of the second joint (e.g., "right_shoulder").
-
-    Returns:
-        np.array: Array containing the distance between the two joints.
-    """
-    x1 = df[f"{joint1_base}_x"].values
-    y1 = df[f"{joint1_base}_y"].values
-    z1 = df[f"{joint1_base}_z"].values if f"{joint1_base}_z" in df else np.zeros_like(x1)  # Handle 2D case
-    x2 = df[f"{joint2_base}_x"].values
-    y2 = df[f"{joint2_base}_y"].values
-    z2 = df[f"{joint2_base}_z"].values if f"{joint2_base}_z" in df else np.zeros_like(x2)  # Handle 2D case
-
-    return np.sqrt((x2 - x1)**2 + (y2 - y1)**2 + (z2 - z1)**2)
-
 def trim_frames(input_csv, output_csv=None, model_dir="models"):
     """
-    Trim a sequence using the distance-feature enhanced model to identify the 
+    Trim a sequence using the trained model to identify the 
     relevant segment of motion data.
     
     Args:
@@ -55,63 +34,91 @@ def trim_frames(input_csv, output_csv=None, model_dir="models"):
             output_dir.mkdir(exist_ok=True)
             output_csv = output_dir / f"{input_path.stem}_trimmed.csv"
         
-        # Set model and scaler paths
-        model_path = Path(model_dir) / "kinect_cutting_model_with_distances.keras"
-        scaler_path = Path(model_dir) / "kinect_cutting_scaler_with_distances.pkl"
+        # Set model paths - try both naming conventions
+        model_paths = [
+            Path(model_dir) / "kinect_cutting_model.keras",
+            Path(model_dir) / "kinect_cutting_model_with_distances.keras"
+        ]
+        scaler_paths = [
+            Path(model_dir) / "kinect_cutting_scaler.pkl",
+            Path(model_dir) / "kinect_cutting_scaler_with_distances.pkl"
+        ]
         
-        # Check if files exist
-        if not model_path.exists():
-            logger.warning(f"Cutting model not found: {model_path}")
+        # Find the first existing model and scaler
+        model_path = None
+        scaler_path = None
+        
+        for m_path, s_path in zip(model_paths, scaler_paths):
+            if m_path.exists() and s_path.exists():
+                model_path = m_path
+                scaler_path = s_path
+                break
+        
+        # Check if files were found
+        if model_path is None or scaler_path is None:
+            logger.warning(f"Cutting model not found in {model_dir}")
             # Return the original data if model is not available
             df = pd.read_csv(input_csv)
             df.to_csv(output_csv, index=False)
             return output_csv, (0, len(df) - 1)
             
-        if not scaler_path.exists():
-            logger.warning(f"Scaler not found: {scaler_path}")
-            # Return the original data if scaler is not available
-            df = pd.read_csv(input_csv)
-            df.to_csv(output_csv, index=False)
-            return output_csv, (0, len(df) - 1)
-        
-        logger.info(f"Trimming frames in {input_csv}")
+        logger.info(f"Trimming frames in {input_csv} using {model_path.name}")
         
         # Load the CSV file
         df = pd.read_csv(input_csv)
         logger.info(f"Loaded {input_csv}: {len(df)} frames")
         
-        # Make a copy of the dataframe for feature calculation
-        df_features = df.drop(columns=["FrameNo"]).copy()
-        df_features.columns = df_features.columns.str.strip()
-        
-        # Calculate the distance features
-        df_features['torso_left_knee_distance'] = calculate_distance(df_features, 'right_shoulder', 'left_knee')
-        df_features['left_hip_right_knee_distance'] = calculate_distance(df_features, 'left_hip', 'right_knee')
+        # Check if enough frames for processing
+        if len(df) < 11:  # Need at least WINDOW size
+            logger.warning(f"Too few frames ({len(df)}) for trimming, minimum is 11")
+            df.to_csv(output_csv, index=False)
+            return output_csv, (0, len(df) - 1)
         
         # Load model and scaler
-        logger.info(f"Loading model from {model_path}")
+        logger.info(f"Loading model: {model_path}")
         model = tf.keras.models.load_model(model_path)
-        logger.info(f"Loading scaler from {scaler_path}")
+        logger.info(f"Loading scaler: {scaler_path}")
         scaler = load(scaler_path)
         
+        # Extract features (drop FrameNo if present)
+        X = df.drop(columns=["FrameNo"]) if "FrameNo" in df.columns else df.copy()
+        
+        # Strip whitespace from column names
+        X.columns = X.columns.str.strip()
+        
+        # Check if this is a "with_distances" model
+        is_distances_model = "with_distances" in str(model_path)
+        
+        # If using the distances model, calculate the distance features
+        if is_distances_model:
+            logger.info("Adding distance features for model")
+            try:
+                X['torso_left_knee_distance'] = calculate_distance(X, 'right_shoulder', 'left_knee')
+                X['left_hip_right_knee_distance'] = calculate_distance(X, 'left_hip', 'right_knee')
+            except Exception as e:
+                logger.warning(f"Could not calculate distance features: {e}. Using standard model.")
+                is_distances_model = False
+        
         # Create windows
-        n_frames = len(df_features)
         WINDOW = 11
         HALF = WINDOW // 2
-        
-        # If sequence is too short, return original
-        if n_frames < WINDOW:
-            logger.warning(f"Sequence too short for trimming ({n_frames} frames, need at least {WINDOW})")
-            df.to_csv(output_csv, index=False)
-            return output_csv, (0, n_frames - 1)
+        n_frames = len(X)
         
         win_feats, centres = [], []
         for idx in range(HALF, n_frames - HALF):
-            win_feats.append(df_features.iloc[idx-HALF : idx+HALF+1].values.ravel())
+            win_feats.append(X.iloc[idx-HALF : idx+HALF+1].values.ravel())
             centres.append(idx)
         
+        if not win_feats:  # Shouldn't happen given earlier check
+            logger.warning("No windows could be created")
+            df.to_csv(output_csv, index=False)
+            return output_csv, (0, n_frames - 1)
+        
         # Preprocess and predict
-        X_win = scaler.transform(np.stack(win_feats))
+        X_win = np.stack(win_feats)
+        X_win = scaler.transform(X_win)
+        
+        logger.info("Running model prediction")
         pred_prob = model.predict(X_win, verbose=0).ravel()
         pred_lbl = (pred_prob >= 0.5).astype(int)
         
@@ -137,7 +144,7 @@ def trim_frames(input_csv, output_csv=None, model_dir="models"):
                 segments.append((seg_start, seg_end))
                 in_seg = False
         
-        # If no segments found, return original sequence
+        # If no segments found, return the original sequence
         if not segments:
             logger.warning("No valid segments found, returning original sequence")
             df.to_csv(output_csv, index=False)
@@ -149,9 +156,9 @@ def trim_frames(input_csv, output_csv=None, model_dir="models"):
         start_idx, end_idx = segments[idx_long]
         
         # Log results
-        logger.info(f"Cutting result: [{start_idx}, {end_idx}]")
-        cut_percentage = (end_idx-start_idx+1)/len(df)
-        logger.info(f"Cut length: {end_idx-start_idx+1} frames ({cut_percentage:.2f} of original)")
+        logger.info(f"Detected boundary frames: [{start_idx}, {end_idx}]")
+        percent_kept = (end_idx - start_idx + 1) / n_frames * 100
+        logger.info(f"Keeping {end_idx - start_idx + 1} frames ({percent_kept:.1f}% of original)")
         
         # Get the trimmed sequence
         trimmed_df = df.iloc[start_idx:end_idx+1].copy()
@@ -171,3 +178,25 @@ def trim_frames(input_csv, output_csv=None, model_dir="models"):
             return output_csv, (0, len(df) - 1)
         except:
             raise
+
+def calculate_distance(df, joint1_base, joint2_base):
+    """
+    Calculates the Euclidean distance between two joints.
+
+    Args:
+        df (pd.DataFrame): DataFrame containing joint coordinates.
+        joint1_base (str): Base name of the first joint (e.g., "left_shoulder").
+        joint2_base (str): Base name of the second joint (e.g., "right_shoulder").
+
+    Returns:
+        np.array: Array containing the distance between the two joints.
+    """
+    x1 = df[f"{joint1_base}_x"].values
+    y1 = df[f"{joint1_base}_y"].values
+    z1 = df[f"{joint1_base}_z"].values if f"{joint1_base}_z" in df.columns else np.zeros_like(x1)
+    
+    x2 = df[f"{joint2_base}_x"].values
+    y2 = df[f"{joint2_base}_y"].values
+    z2 = df[f"{joint2_base}_z"].values if f"{joint2_base}_z" in df.columns else np.zeros_like(x2)
+    
+    return np.sqrt((x2 - x1)**2 + (y2 - y1)**2 + (z2 - z1)**2)
