@@ -1,37 +1,26 @@
-import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
-import "./globals.css";
+import type React from "react"
+import "./globals.css"
+import { Inter } from "next/font/google"
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
+const inter = Inter({ subsets: ["latin"] })
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
+export const metadata = {
+  title: "ML Prediction Dashboard",
+  description: "Upload data and run machine learning predictions with ease",
+}
 
-export const metadata: Metadata = {
-  title: "Project In Data Intensive Systems",
-  description: "Automated Movement Assessment",
-};
-
-export const dynamic = "force-dynamic";
-export const revalidate = 0;
-
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+export default function RootLayout({ children }: {
+  children: React.ReactNode
+}) {
   return (
-    <html lang="en">
+    <html lang="en" className={inter.className}>
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        className="
+          bg-gradient-to-b from-[#1F0C3A] via-[#2A0F4D] to-[#130B26]
+          text-white min-h-screen"
       >
         {children}
       </body>
     </html>
-  );
+  )
 }
