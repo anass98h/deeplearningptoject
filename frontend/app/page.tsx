@@ -67,12 +67,10 @@ export default function MLDashboard() {
             </div>
 
             {/* Video Trimmer Component */}
-            {/* This is where the VideoTrimmer component will be rendered */}
             <VideoTrimmer />
           </div>
         )}
       </div>
     </div>
   );
-
 }
