@@ -336,7 +336,7 @@ export function VideoTrimmer() {
 
     return (
       <div className="mb-2 mt-4">
-        <div className="text-sm font-medium text-gray-700 mb-1 flex justify-between">
+        <div className="text-sm font-medium text-white-700 mb-1 flex justify-between">
           <span>Frame Timeline</span>
           <span>
             {currentFrame + 1} / {originalData.length}
@@ -345,7 +345,7 @@ export function VideoTrimmer() {
 
         <div className="relative">
           {/* Base track */}
-          <div className="h-10 bg-gray-100 rounded-md overflow-hidden flex">
+          <div className="h-10 bg-white-100 rounded-md overflow-hidden flex">
             {timelineFrames.map(({ index, isKept, blockSize = 1 }) => {
               // Highlight current frame or block
               const isCurrentFrame =
@@ -356,11 +356,10 @@ export function VideoTrimmer() {
               return (
                 <div
                   key={index}
-                  className={`h-full border-r border-white ${
-                    isKept
-                      ? "bg-green-200 hover:bg-green-300"
-                      : "bg-red-200 hover:bg-red-300"
-                  } ${isCurrentFrame ? "ring-2 ring-blue-500 ring-inset" : ""}`}
+                  className={`h-full border-r border-blue-200 ${isKept
+                    ? "bg-green-200 hover:bg-green-300"
+                    : "bg-red-200 hover:bg-red-300"
+                    } ${isCurrentFrame ? "ring-2 ring-blue-500 ring-inset" : ""}`}
                   style={{
                     width: `${((blockSize || 1) / originalData.length) * 100}%`,
                     cursor: "pointer",
@@ -376,9 +375,8 @@ export function VideoTrimmer() {
           <div
             className="absolute top-0 w-1 h-10 bg-blue-600"
             style={{
-              left: `${
-                (currentFrame / Math.max(1, originalData.length - 1)) * 100
-              }%`,
+              left: `${(currentFrame / Math.max(1, originalData.length - 1)) * 100
+                }%`,
               transform: "translateX(-50%)",
             }}
           />
@@ -400,16 +398,14 @@ export function VideoTrimmer() {
     return (
       <div className="mt-2 flex justify-center">
         <Badge
-          className={`px-3 py-1 ${
-            isKept
-              ? "bg-green-100 text-green-800 border-green-200"
-              : "bg-red-100 text-red-800 border-red-200"
-          }`}
+          className={`px-3 py-1 ${isKept
+            ? "bg-green-100 text-green-800 border-green-200"
+            : "bg-red-100 text-red-800 border-red-200"
+            }`}
         >
           {isKept
-            ? `Frame kept (Kinect 3D #${currentFrame + 1} → Trimmed #${
-                trimmedIndex + 1
-              })`
+            ? `Frame kept (Kinect 3D #${currentFrame + 1} → Trimmed #${trimmedIndex + 1
+            })`
             : `Frame removed (Kinect 3D #${currentFrame + 1})`}
         </Badge>
       </div>
@@ -485,9 +481,8 @@ export function VideoTrimmer() {
             <Button
               variant="outline"
               onClick={toggleAutoRotate}
-              className={`transition-all duration-200 ${
-                autoRotate ? "bg-blue-100 text-blue-700" : "hover:bg-blue-50"
-              }`}
+              className={`transition-all duration-200 ${autoRotate ? "bg-blue-100 text-black" : "hover:bg-blue-50"
+                }`}
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -495,7 +490,7 @@ export function VideoTrimmer() {
                 height="24"
                 viewBox="0 0 24 24"
                 fill="none"
-                stroke="currentColor"
+                stroke="black"
                 strokeWidth="2"
                 strokeLinecap="round"
                 strokeLinejoin="round"
@@ -508,7 +503,7 @@ export function VideoTrimmer() {
             </Button>
           </div>
 
-          <div className="text-sm text-gray-600">
+          <div className="text-sm text-white-600">
             Frame: {currentFrame + 1} / {maxFrames}
           </div>
         </div>
@@ -579,7 +574,7 @@ export function VideoTrimmer() {
           <Card className="shadow-md">
             <CardContent className="pt-6">
               <div className="mb-4 flex justify-between items-center">
-                <h3 className="text-lg font-medium text-gray-800">
+                <h3 className="text-lg font-medium text-white-800">
                   Kinect 3D Data
                 </h3>
                 <Badge variant="outline" className="bg-blue-50 text-blue-700">
@@ -600,7 +595,7 @@ export function VideoTrimmer() {
           <Card className="shadow-md">
             <CardContent className="pt-6">
               <div className="mb-4 flex justify-between items-center">
-                <h3 className="text-lg font-medium text-gray-800">
+                <h3 className="text-lg font-medium text-white-800">
                   Trimmed Data
                 </h3>
                 {frameMappings[currentFrame] !== -1 ? (
@@ -625,7 +620,7 @@ export function VideoTrimmer() {
                 />
               ) : (
                 <div className="h-64 flex items-center justify-center bg-gray-50 border rounded-lg">
-                  <p className="text-gray-500">
+                  <p className="text-white-500">
                     This frame was removed during trimming
                   </p>
                 </div>
@@ -681,7 +676,7 @@ export function VideoTrimmer() {
             <div className="mt-4 flex gap-4 justify-center">
               <Badge
                 variant="outline"
-                className="bg-blue-50 text-blue-700 border-blue-200 px-3 py-1"
+                className="bg-blue-50 text-black border-blue-200 px-3 py-1"
               >
                 Kinect 3D: {originalData.length} frames
               </Badge>
@@ -694,10 +689,10 @@ export function VideoTrimmer() {
                   Trimmed: {trimmedData.length} frames (
                   {originalData.length > 0
                     ? Math.round(
-                        ((originalData.length - trimmedData.length) /
-                          originalData.length) *
-                          100
-                      )
+                      ((originalData.length - trimmedData.length) /
+                        originalData.length) *
+                      100
+                    )
                     : 0}
                   % removed)
                 </Badge>
@@ -707,7 +702,7 @@ export function VideoTrimmer() {
 
           {/* Frame reduction information */}
           {originalData.length > 0 && trimmedData.length > 0 && (
-            <div className="mt-4 text-sm text-gray-600 flex items-center justify-center">
+            <div className="mt-4 text-sm text-white-600 flex items-center justify-center">
               <Info className="h-4 w-4 mr-1 text-blue-500" />
               <span>
                 Green segments represent frames that were kept, red segments
