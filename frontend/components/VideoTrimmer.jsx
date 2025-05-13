@@ -437,24 +437,22 @@ export function VideoTrimmer() {
         {/* Animation controls */}
         <div className="flex items-center justify-between">
           <div className="flex space-x-4">
+            {/* PLAY / PAUSE */}
             <Button
-              variant="outline"
-              size="icon"
               onClick={() => setIsPlaying(!isPlaying)}
-              className="transition-all duration-200 hover:bg-blue-50"
+              className="bg-blue-600 text-white hover:bg-blue-700 transition-all duration-200 flex items-center space-x-2 px-4 py-2"
+            /* variant di default (filled) */
             >
               {isPlaying ? (
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
-                  width="24"
-                  height="24"
                   viewBox="0 0 24 24"
                   fill="none"
                   stroke="currentColor"
                   strokeWidth="2"
                   strokeLinecap="round"
                   strokeLinejoin="round"
-                  className="h-5 w-5 text-blue-600"
+                  className="h-5 w-5"
                 >
                   <rect x="6" y="4" width="4" height="16" />
                   <rect x="14" y="4" width="4" height="16" />
@@ -462,48 +460,48 @@ export function VideoTrimmer() {
               ) : (
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
-                  width="24"
-                  height="24"
                   viewBox="0 0 24 24"
                   fill="none"
                   stroke="currentColor"
                   strokeWidth="2"
                   strokeLinecap="round"
                   strokeLinejoin="round"
-                  className="h-5 w-5 text-blue-600"
+                  className="h-5 w-5"
                 >
                   <circle cx="12" cy="12" r="10" />
-                  <polygon points="10 8 16 12 10 16 10 8" />
+                  <polygon points="10 8 16 12 10 16" />
                 </svg>
               )}
+              <span>{isPlaying ? "Pause" : "Play"}</span>
             </Button>
 
+            {/* ROTATE ON/OFF */}
             <Button
-              variant="outline"
               onClick={toggleAutoRotate}
-              className={`transition-all duration-200 ${autoRotate ? "bg-blue-100 text-black" : "hover:bg-blue-50"
-                }`}
+              className={`
+        transition-all duration-200 
+        ${autoRotate ? "bg-blue-700" : "bg-blue-600 hover:bg-blue-700"} 
+        text-white flex items-center space-x-2 px-4 py-2
+      `}
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
-                width="24"
-                height="24"
                 viewBox="0 0 24 24"
                 fill="none"
-                stroke="black"
+                stroke="currentColor"
                 strokeWidth="2"
                 strokeLinecap="round"
                 strokeLinejoin="round"
-                className="h-4 w-4 mr-2"
+                className="h-5 w-5"
               >
                 <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
                 <path d="M3 3v5h5" />
               </svg>
-              {autoRotate ? "Rotation On" : "Rotation Off"}
+              <span>{autoRotate ? "Rotation On" : "Rotation Off"}</span>
             </Button>
           </div>
 
-          <div className="text-sm text-white-600">
+          <div className="text-sm text-gray-200">
             Frame: {currentFrame + 1} / {maxFrames}
           </div>
         </div>

@@ -20,6 +20,7 @@ export default function MLDashboard() {
       <div className="w-full max-w-4xl">
         {/* Header */}
         <div className="text-center mb-8">
+          <img src="/logo.png" alt="SquatCheck Logo" className="mx-auto mb-4 h-48 w-48" />
           <h1 className="text-5xl font-extrabold tracking-tight">
             ML Prediction Dashboard
           </h1>
