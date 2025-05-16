@@ -12,7 +12,7 @@ DATA_DIR_CONFIG = {
     # 'cut_data_dir':'kinect_good_preprocessed',
     # 'uncut_data_dir':'kinect_good_preprocessed_not_cut',
     'unprocessed': {
-        'bad_good':'kinect_good_vs_bad_not_preprocessed'
+        'bad_good':'kinect_good_preprocessed'
         # 'bad_good':'test'
 
     },
@@ -21,6 +21,7 @@ DATA_DIR_CONFIG = {
                 'mirror': 'augmentation/miroor',
                 'rotate': 'augmentation/rotate',
                 'scale': 'augmentation/scale',
+                'cascade': 'augmentation/cascade',
                 # 'shear': 'augmentation/translate',
         },
     }
@@ -29,7 +30,7 @@ DATA_DIR_CONFIG = {
 aug_config = {
     "mirror": {
         "x": {"apply": True},
-        "y": {"apply": True},
+        "y": {"apply": False},
         "z": {"apply": False}
     },
 
@@ -42,7 +43,7 @@ aug_config = {
     "scale": {
         "apply": True,
         # (e.g., 1.5 stretches, 0.8 compresses)
-        "factors": [1.5, 1.3, 1.2]  # [fx, fy, fz]  
+        "factors": [1.5, 1.5, 1.5]  # [fx, fy, fz]  
     },
 
     # "shear": {
@@ -196,59 +197,7 @@ def save_data(data: pd.DataFrame, config_path: str, filename: str, create_dir: b
     except Exception as e:
         # Re-raise other exceptions with context
         raise type(e)(f"Error saving data to '{config_path}/{filename}': {str(e)}")
-
-
-def mirror_to_new_df(df: pd.DataFrame, axis: str = 'x') -> pd.DataFrame:
-    """
-    Generate a new DataFrame containing mirrored joint columns.
-    Each original joint coordinate (x, y, z) is multiplied by -1 on the chosen axis.
     
-    Parameters:
-        df    : Input DataFrame with joint columns.
-        axis  : Axis to mirror across ('x', 'y', or 'z').
-    Returns:
-        DataFrame of same length with columns like 'head_x_mirror', 'head_y_mirror', etc.
-    """
-    joints = get_joint_names(df)
-    
-    # Start with FrameNo if it exists
-    columns_order = []
-    if 'FrameNo' in df.columns:
-        columns_order.append('FrameNo')
-    
-    # Create an empty DataFrame
-    df_mirror = pd.DataFrame(index=df.index)
-    
-    # Add FrameNo if exists
-    if 'FrameNo' in df.columns:
-        df_mirror['FrameNo'] = df['FrameNo']
-    
-    # Process each joint in the original order
-    for j in joints:
-        for coord in ('x', 'y', 'z'):
-            col_orig = f" {j}_{coord}" if coord == 'x' and j == 'head' else f"{j}_{coord}"
-            col_new = f"{j}_{coord}_mirror_{axis}"
-            factor = -1 if coord == axis else 1
-            df_mirror[col_new] = round(df[col_orig] * factor, 6)
-            columns_order.append(col_new)
-    
-    # Reorder columns
-    return df_mirror[columns_order]
-
-def add_mirror_augmentation(df: pd.DataFrame, file_prefix: str = None) -> pd.DataFrame:
-    
-    # Check if the axis is valid
-    if 'mirror' not in aug_config:
-        raise ValueError("Invalid augmentation configuration: 'mirror' key not found.")
-    
-    # Iterate through the axes and apply mirroring
-    for axis in aug_config['mirror']:
-        if aug_config['mirror'][axis]['apply']:
-            df_mirror = mirror_to_new_df(df, axis)
-            save_data(df_mirror, 'processed.augmentation.mirror', f'{file_prefix}_{axis}.csv')
-    
-    return df_mirror
-
 def get_joint_names(columns):
     joints = set()
     for col in columns:
@@ -262,7 +211,48 @@ def get_joint_names(columns):
     joints = list(joints)
     # print(f"get_joint_names_ Joints: {joints}")
     return joints
+def mirror_to_new_df(df: pd.DataFrame, axis: str = 'x') -> pd.DataFrame:
+    """
+    Generate a new DataFrame containing mirrored joint columns.
+    Each original joint coordinate (x, y, z) is multiplied by -1 on the chosen axis.
+    Column names stay the same as the original.
+    
+    Parameters:
+        df    : Input DataFrame with joint columns.
+        axis  : Axis to mirror across ('x', 'y', or 'z').
+    Returns:
+        DataFrame of same length with mirrored data but original column names
+    """
+    joints = get_joint_names(df.columns)
+    
+    # Create a copy of the DataFrame - preserving ALL columns exactly
+    df_mirror = df.copy()
+    
+    # Process each joint while keeping column names the same
+    for j in joints:
+        for coord in ('x', 'y', 'z'):
+            # Handle special case for head_x column
+            col = f" {j}_{coord}" if coord == 'x' and j == 'head' else f"{j}_{coord}"
+            
+            if coord == axis:
+                # Apply mirroring only to the specified axis - keeping the SAME column name
+                df_mirror[col] = np.round(df[col] * -1, 6)
+    
+    return df_mirror
 
+def add_mirror_augmentation(df: pd.DataFrame, file_prefix: str = None) -> pd.DataFrame:
+    """Apply mirroring augmentation and save to files with appropriate naming"""
+    # Check if the axis is valid
+    if 'mirror' not in aug_config:
+        raise ValueError("Invalid augmentation configuration: 'mirror' key not found.")
+    
+    # Iterate through the axes and apply mirroring
+    for axis in aug_config['mirror']:
+        if aug_config['mirror'][axis]['apply']:
+            df_mirror = mirror_to_new_df(df, axis)
+            save_data(df_mirror, 'processed.augmentation.mirror', f'{file_prefix}_mirror_{axis}.csv')
+    
+    return df_mirror
 
 def rotate_to_new_df(
     df: pd.DataFrame,
@@ -272,13 +262,14 @@ def rotate_to_new_df(
     """
     Generate a new DataFrame containing rotated joint columns.
     Rotates each joint position around the specified axis by angle_rad.
+    Column names stay the same as the original.
     
     Parameters:
         df        : Input DataFrame with joint columns.
         axis      : Axis to rotate around ('x', 'y', or 'z').
         angle_rad : Rotation angle in radians.
     Returns:
-        DataFrame of same length with columns like 'head_x_rot', 'head_y_rot', etc.
+        DataFrame of same length with rotated data but original column names
     """
     # Build rotation matrix
     c, s = np.cos(angle_rad), np.sin(angle_rad)
@@ -297,52 +288,48 @@ def rotate_to_new_df(
     else:
         raise ValueError("axis must be 'x', 'y', or 'z'")
     
-    joints = get_joint_names(df)
+    joints = get_joint_names(df.columns)
     
-    # Start with FrameNo if it exists
-    columns_order = []
-    if 'FrameNo' in df.columns:
-        columns_order.append('FrameNo')
+    # Create a copy of the DataFrame with ALL columns preserved
+    df_rot = df.copy()
     
-    df_rot = pd.DataFrame(index=df.index)
-    
-    # Add FrameNo if exists
-    if 'FrameNo' in df.columns:
-        df_rot['FrameNo'] = df['FrameNo']
-    
-    # Apply rotation per joint in a vectorized manner
+    # Apply rotation per joint while keeping column names the same
     for j in joints:
-        x = df[f"{j}_x"].values if j != 'head' else df[f" {j}_x"].values
-        y = df[f"{j}_y"].values
-        z = df[f"{j}_z"].values
+        x_col = f" {j}_x" if j == 'head' else f"{j}_x"
+        y_col = f"{j}_y"
+        z_col = f"{j}_z"
         
-        col_x = f"{j}_x_rot"
-        col_y = f"{j}_y_rot"
-        col_z = f"{j}_z_rot"
+        x = df[x_col].values
+        y = df[y_col].values
+        z = df[z_col].values
         
-        df_rot[col_x] = np.round(R[0,0]*x + R[0,1]*y + R[0,2]*z, 6)
-        df_rot[col_y] = np.round(R[1,0]*x + R[1,1]*y + R[1,2]*z, 6)
-        df_rot[col_z] = np.round(R[2,0]*x + R[2,1]*y + R[2,2]*z, 6)
+        # Calculate rotated coordinates
+        new_x = np.round(R[0,0]*x + R[0,1]*y + R[0,2]*z, 6)
+        new_y = np.round(R[1,0]*x + R[1,1]*y + R[1,2]*z, 6)
+        new_z = np.round(R[2,0]*x + R[2,1]*y + R[2,2]*z, 6)
         
-        columns_order.extend([col_x, col_y, col_z])
+        # Update the DataFrame in place - keeping the SAME column names
+        df_rot[x_col] = new_x
+        df_rot[y_col] = new_y
+        df_rot[z_col] = new_z
     
-    # Reorder columns
-    return df_rot[columns_order]
+    return df_rot
 
 def add_rotation_augmentation(df: pd.DataFrame, file_prefix: str = None) -> pd.DataFrame:
-    
+    """Apply rotation augmentation and save to files with appropriate naming"""
     # Check if the axis is valid
     if 'rotate' not in aug_config:
-        raise ValueError("Invalid augmentation configuration: 'mirror' key not found.")
+        raise ValueError("Invalid augmentation configuration: 'rotate' key not found.")
     
-    # Iterate through the axes and apply mirroring
+    # Iterate through the axes and apply rotation
     for axis in aug_config['rotate']:
         if aug_config['rotate'][axis]['apply']:
-            df_rotate = rotate_to_new_df(df, axis)
-            save_data(df_rotate, 'processed.augmentation.rotate', f'{file_prefix}_{axis}.csv')
+            angle = aug_config['rotate'][axis]['angle_deg']
+            df_rotate = rotate_to_new_df(df, axis, angle)
+            angle_deg = int(angle * 180 / np.pi)  # Convert to degrees for filename
+            save_data(df_rotate, 'processed.augmentation.rotate', f'{file_prefix}_rotate_{axis}_{angle_deg}deg.csv')
     
     return df_rotate
-
 
 def scale_to_new_df(
     df: pd.DataFrame,
@@ -351,65 +338,142 @@ def scale_to_new_df(
     scale_z: float = 1.0
 ) -> pd.DataFrame:
     """
-    Generate a new DataFrame containing scaled (compressed or stretched) joint columns.
-    Each original joint coordinate is multiplied by the specified scale factor per axis.
-
+    Generate a new DataFrame containing scaled joint coordinates.
+    Column names stay the same as the original.
+    
     Parameters:
         df      : Input DataFrame with joint columns.
-        scale_x : Scaling factor for the X-axis (e.g., 1.5 stretches, 0.8 compresses)
+        scale_x : Scaling factor for the X-axis
         scale_y : Scaling factor for the Y-axis
         scale_z : Scaling factor for the Z-axis
-
     Returns:
-        DataFrame of same length with columns like 'head_x_scaled', 'head_y_scaled', etc.
+        DataFrame of same length with scaled data but original column names
     """
-    joints = get_joint_names(df)
+    joints = get_joint_names(df.columns)
     
-    # Start with FrameNo if it exists
-    columns_order = []
-    if 'FrameNo' in df.columns:
-        columns_order.append('FrameNo')
+    # Create a copy of the DataFrame with ALL columns preserved
+    df_scaled = df.copy()
     
-    df_scaled = pd.DataFrame(index=df.index)
-    
-    # Add FrameNo if exists
-    if 'FrameNo' in df.columns:
-        df_scaled['FrameNo'] = df['FrameNo']
-
+    # Apply scaling per joint while keeping column names the same
     for j in joints:
-        x = df[f"{j}_x"].values if j != 'head' else df[f" {j}_x"].values
-        y = df[f"{j}_y"].values
-        z = df[f"{j}_z"].values
+        x_col = f" {j}_x" if j == 'head' else f"{j}_x"
+        y_col = f"{j}_y"
+        z_col = f"{j}_z"
         
-        col_x = f"{j}_x_scaled"
-        col_y = f"{j}_y_scaled"
-        col_z = f"{j}_z_scaled"
-        
-        df_scaled[col_x] = np.round(x * scale_x, 6)
-        df_scaled[col_y] = np.round(y * scale_y, 6)
-        df_scaled[col_z] = np.round(z * scale_z, 6)
-        
-        columns_order.extend([col_x, col_y, col_z])
+        # Apply scaling while keeping the SAME column names
+        df_scaled[x_col] = np.round(df[x_col] * scale_x, 6)
+        df_scaled[y_col] = np.round(df[y_col] * scale_y, 6)
+        df_scaled[z_col] = np.round(df[z_col] * scale_z, 6)
     
-    # Reorder columns
-    return df_scaled[columns_order]
+    return df_scaled
 
 def add_scale_augmentation(df: pd.DataFrame, file_prefix: str = None) -> pd.DataFrame:
-    
+    """Apply scaling augmentation and save to files with appropriate naming"""
     # Check if the axis is valid
     if 'scale' not in aug_config:
-        raise ValueError("Invalid augmentation configuration: 'mirror' key not found.")
+        raise ValueError("Invalid augmentation configuration: 'scale' key not found.")
     
     factors = aug_config['scale']['factors']
-    # Iterate through the axes and apply mirroring
+    # Apply scaling if enabled
     if aug_config['scale']['apply']:
         df_scale = scale_to_new_df(df, factors[0], factors[1], factors[2])
-
-        save_data(df_scale, 'processed.augmentation.scale', f'{file_prefix}.csv')
+        # Include the scale factors in the filename
+        scale_str = f"scale_{factors[0]}_{factors[1]}_{factors[2]}"
+        save_data(df_scale, 'processed.augmentation.scale', f'{file_prefix}_{scale_str}.csv')
     
     return df_scale
 
-# Usage example:
+
+def apply_cascade_augmentation(df: pd.DataFrame, file_prefix: str = None) -> None:
+    """
+    Apply cascade augmentation by combining multiple augmentation techniques sequentially.
+    This creates data with combinations of different augmentation types.
+    All DataFrames maintain the original column naming scheme.
+    
+    Parameters:
+        df          : Input DataFrame with joint columns
+        file_prefix : Prefix for output filenames
+    
+    Returns:
+        None - Files are saved directly to the appropriate directories
+    """
+    print(f"Applying cascade augmentation for {file_prefix}")
+    
+    # Define which augmentations are enabled
+    mirror_enabled = any(aug_config['mirror'][axis]['apply'] for axis in aug_config['mirror'])
+    rotate_enabled = any(aug_config['rotate'][axis]['apply'] for axis in aug_config['rotate'])
+    scale_enabled = aug_config['scale']['apply']
+    
+    # --- Mirror + Rotate cascade ---
+    if mirror_enabled and rotate_enabled:
+        for m_axis in aug_config['mirror']:
+            if aug_config['mirror'][m_axis]['apply']:
+                # First apply mirroring
+                df_mirrored = mirror_to_new_df(df, m_axis)
+                
+                # Then apply rotation to the mirrored data
+                for r_axis in aug_config['rotate']:
+                    if aug_config['rotate'][r_axis]['apply']:
+                        angle = aug_config['rotate'][r_axis]['angle_deg']
+                        angle_deg = int(angle * 180 / np.pi)
+                        df_mirror_rotate = rotate_to_new_df(df_mirrored, r_axis, angle)
+                        save_data(df_mirror_rotate, 'processed.augmentation.cascade', 
+                                 f'{file_prefix}_mirror_{m_axis}_rotate_{r_axis}_{angle_deg}deg.csv')
+    
+    # --- Rotate + Scale cascade ---
+    if rotate_enabled and scale_enabled:
+        factors = aug_config['scale']['factors']
+        scale_str = f"scale_{factors[0]}_{factors[1]}_{factors[2]}"
+        
+        for r_axis in aug_config['rotate']:
+            if aug_config['rotate'][r_axis]['apply']:
+                # First apply rotation
+                angle = aug_config['rotate'][r_axis]['angle_deg']
+                angle_deg = int(angle * 180 / np.pi)
+                df_rotated = rotate_to_new_df(df, r_axis, angle)
+                
+                # Then scale the rotated data
+                df_rotate_scale = scale_to_new_df(df_rotated, factors[0], factors[1], factors[2])
+                save_data(df_rotate_scale, 'processed.augmentation.cascade', 
+                         f'{file_prefix}_rotate_{r_axis}_{angle_deg}deg_{scale_str}.csv')
+    
+    # --- Mirror + Scale cascade ---
+    if mirror_enabled and scale_enabled:
+        factors = aug_config['scale']['factors']
+        scale_str = f"scale_{factors[0]}_{factors[1]}_{factors[2]}"
+        
+        for m_axis in aug_config['mirror']:
+            if aug_config['mirror'][m_axis]['apply']:
+                # First apply mirroring
+                df_mirrored = mirror_to_new_df(df, m_axis)
+                
+                # Then scale the mirrored data
+                df_mirror_scale = scale_to_new_df(df_mirrored, factors[0], factors[1], factors[2])
+                save_data(df_mirror_scale, 'processed.augmentation.cascade', 
+                         f'{file_prefix}_mirror_{m_axis}_{scale_str}.csv')
+    
+    # --- Mirror + Rotate + Scale cascade (full cascade) ---
+    if mirror_enabled and rotate_enabled and scale_enabled:
+        factors = aug_config['scale']['factors']
+        scale_str = f"scale_{factors[0]}_{factors[1]}_{factors[2]}"
+        
+        for m_axis in aug_config['mirror']:
+            if aug_config['mirror'][m_axis]['apply']:
+                # First apply mirroring
+                df_mirrored = mirror_to_new_df(df, m_axis)
+                
+                for r_axis in aug_config['rotate']:
+                    if aug_config['rotate'][r_axis]['apply']:
+                        # Then apply rotation to mirrored data
+                        angle = aug_config['rotate'][r_axis]['angle_deg']
+                        angle_deg = int(angle * 180 / np.pi)
+                        df_mirror_rotate = rotate_to_new_df(df_mirrored, r_axis, angle)
+                        
+                        # Finally apply scaling to the mirrored + rotated data
+                        df_full_cascade = scale_to_new_df(df_mirror_rotate, factors[0], factors[1], factors[2])
+                        save_data(df_full_cascade, 'processed.augmentation.cascade', 
+                                 f'{file_prefix}_mirror_{m_axis}_rotate_{r_axis}_{angle_deg}deg_{scale_str}.csv')
+
 # df = pd.read_csv("centralized_squat.csv")
 def main():
     print("\n=== AUGMENTATION PROCESSING ===")
@@ -430,10 +494,11 @@ def main():
         current_file = file.split('.')[0]
         
         # Track augmentation steps
-        add_mirror_augmentation(df, current_file)
-        add_rotation_augmentation(df, current_file)
-        add_scale_augmentation(df, current_file)
-        
+        # add_mirror_augmentation(df, current_file)
+        # add_rotation_augmentation(df, current_file)
+        # add_scale_augmentation(df, current_file)
+        apply_cascade_augmentation(df, current_file)
+
         print(f"✓ Completed processing file: {file}")
 
     print("\n=== AUGMENTATION PROCESSING COMPLETE ===")
