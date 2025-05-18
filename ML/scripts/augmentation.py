@@ -12,13 +12,13 @@ DATA_DIR_CONFIG = {
     # 'cut_data_dir':'kinect_good_preprocessed',
     # 'uncut_data_dir':'kinect_good_preprocessed_not_cut',
     'unprocessed': {
-        'bad_good':'kinect_good_preprocessed'
+        'bad_good':'kinect_good_vs_bad_not_preprocessed'
         # 'bad_good':'test'
 
     },
     'processed': {
         'augmentation': {
-                'mirror': 'augmentation/miroor',
+                'mirror': 'augmentation/mirror',
                 'rotate': 'augmentation/rotate',
                 'scale': 'augmentation/scale',
                 'cascade': 'augmentation/cascade',
@@ -250,7 +250,7 @@ def add_mirror_augmentation(df: pd.DataFrame, file_prefix: str = None) -> pd.Dat
     for axis in aug_config['mirror']:
         if aug_config['mirror'][axis]['apply']:
             df_mirror = mirror_to_new_df(df, axis)
-            save_data(df_mirror, 'processed.augmentation.mirror', f'{file_prefix}_mirror_{axis}.csv')
+            save_data(df_mirror, 'processed.augmentation.mirror', f'{file_prefix}.csv')
     
     return df_mirror
 
@@ -326,8 +326,7 @@ def add_rotation_augmentation(df: pd.DataFrame, file_prefix: str = None) -> pd.D
         if aug_config['rotate'][axis]['apply']:
             angle = aug_config['rotate'][axis]['angle_deg']
             df_rotate = rotate_to_new_df(df, axis, angle)
-            angle_deg = int(angle * 180 / np.pi)  # Convert to degrees for filename
-            save_data(df_rotate, 'processed.augmentation.rotate', f'{file_prefix}_rotate_{axis}_{angle_deg}deg.csv')
+            save_data(df_rotate, 'processed.augmentation.rotate', f'{file_prefix}.csv')
     
     return df_rotate
 
@@ -377,9 +376,7 @@ def add_scale_augmentation(df: pd.DataFrame, file_prefix: str = None) -> pd.Data
     # Apply scaling if enabled
     if aug_config['scale']['apply']:
         df_scale = scale_to_new_df(df, factors[0], factors[1], factors[2])
-        # Include the scale factors in the filename
-        scale_str = f"scale_{factors[0]}_{factors[1]}_{factors[2]}"
-        save_data(df_scale, 'processed.augmentation.scale', f'{file_prefix}_{scale_str}.csv')
+        save_data(df_scale, 'processed.augmentation.scale', f'{file_prefix}.csv')
     
     return df_scale
 
@@ -387,8 +384,7 @@ def add_scale_augmentation(df: pd.DataFrame, file_prefix: str = None) -> pd.Data
 def apply_cascade_augmentation(df: pd.DataFrame, file_prefix: str = None) -> None:
     """
     Apply cascade augmentation by combining multiple augmentation techniques sequentially.
-    This creates data with combinations of different augmentation types.
-    All DataFrames maintain the original column naming scheme.
+    Only keeps the full Mirror + Rotate + Scale cascade.
     
     Parameters:
         df          : Input DataFrame with joint columns
@@ -404,58 +400,9 @@ def apply_cascade_augmentation(df: pd.DataFrame, file_prefix: str = None) -> Non
     rotate_enabled = any(aug_config['rotate'][axis]['apply'] for axis in aug_config['rotate'])
     scale_enabled = aug_config['scale']['apply']
     
-    # --- Mirror + Rotate cascade ---
-    if mirror_enabled and rotate_enabled:
-        for m_axis in aug_config['mirror']:
-            if aug_config['mirror'][m_axis]['apply']:
-                # First apply mirroring
-                df_mirrored = mirror_to_new_df(df, m_axis)
-                
-                # Then apply rotation to the mirrored data
-                for r_axis in aug_config['rotate']:
-                    if aug_config['rotate'][r_axis]['apply']:
-                        angle = aug_config['rotate'][r_axis]['angle_deg']
-                        angle_deg = int(angle * 180 / np.pi)
-                        df_mirror_rotate = rotate_to_new_df(df_mirrored, r_axis, angle)
-                        save_data(df_mirror_rotate, 'processed.augmentation.cascade', 
-                                 f'{file_prefix}_mirror_{m_axis}_rotate_{r_axis}_{angle_deg}deg.csv')
-    
-    # --- Rotate + Scale cascade ---
-    if rotate_enabled and scale_enabled:
-        factors = aug_config['scale']['factors']
-        scale_str = f"scale_{factors[0]}_{factors[1]}_{factors[2]}"
-        
-        for r_axis in aug_config['rotate']:
-            if aug_config['rotate'][r_axis]['apply']:
-                # First apply rotation
-                angle = aug_config['rotate'][r_axis]['angle_deg']
-                angle_deg = int(angle * 180 / np.pi)
-                df_rotated = rotate_to_new_df(df, r_axis, angle)
-                
-                # Then scale the rotated data
-                df_rotate_scale = scale_to_new_df(df_rotated, factors[0], factors[1], factors[2])
-                save_data(df_rotate_scale, 'processed.augmentation.cascade', 
-                         f'{file_prefix}_rotate_{r_axis}_{angle_deg}deg_{scale_str}.csv')
-    
-    # --- Mirror + Scale cascade ---
-    if mirror_enabled and scale_enabled:
-        factors = aug_config['scale']['factors']
-        scale_str = f"scale_{factors[0]}_{factors[1]}_{factors[2]}"
-        
-        for m_axis in aug_config['mirror']:
-            if aug_config['mirror'][m_axis]['apply']:
-                # First apply mirroring
-                df_mirrored = mirror_to_new_df(df, m_axis)
-                
-                # Then scale the mirrored data
-                df_mirror_scale = scale_to_new_df(df_mirrored, factors[0], factors[1], factors[2])
-                save_data(df_mirror_scale, 'processed.augmentation.cascade', 
-                         f'{file_prefix}_mirror_{m_axis}_{scale_str}.csv')
-    
     # --- Mirror + Rotate + Scale cascade (full cascade) ---
     if mirror_enabled and rotate_enabled and scale_enabled:
         factors = aug_config['scale']['factors']
-        scale_str = f"scale_{factors[0]}_{factors[1]}_{factors[2]}"
         
         for m_axis in aug_config['mirror']:
             if aug_config['mirror'][m_axis]['apply']:
@@ -466,13 +413,14 @@ def apply_cascade_augmentation(df: pd.DataFrame, file_prefix: str = None) -> Non
                     if aug_config['rotate'][r_axis]['apply']:
                         # Then apply rotation to mirrored data
                         angle = aug_config['rotate'][r_axis]['angle_deg']
-                        angle_deg = int(angle * 180 / np.pi)
                         df_mirror_rotate = rotate_to_new_df(df_mirrored, r_axis, angle)
                         
                         # Finally apply scaling to the mirrored + rotated data
                         df_full_cascade = scale_to_new_df(df_mirror_rotate, factors[0], factors[1], factors[2])
-                        save_data(df_full_cascade, 'processed.augmentation.cascade', 
-                                 f'{file_prefix}_mirror_{m_axis}_rotate_{r_axis}_{angle_deg}deg_{scale_str}.csv')
+                        save_data(df_full_cascade, 'processed.augmentation.cascade', f'{file_prefix}.csv')
+                        
+        # Remove all other cascades - delete these sections completely
+        # (Mirror + Rotate, Rotate + Scale, Mirror + Scale sections are removed)
 
 # df = pd.read_csv("centralized_squat.csv")
 def main():
@@ -494,10 +442,10 @@ def main():
         current_file = file.split('.')[0]
         
         # Track augmentation steps
-        # add_mirror_augmentation(df, current_file)
+        add_mirror_augmentation(df, current_file)
         # add_rotation_augmentation(df, current_file)
         # add_scale_augmentation(df, current_file)
-        apply_cascade_augmentation(df, current_file)
+        # apply_cascade_augmentation(df, current_file)
 
         print(f"✓ Completed processing file: {file}")
 
