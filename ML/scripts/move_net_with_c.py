@@ -270,7 +270,7 @@ def batch_process_videos(video_dir, output_dir="output_poses", extension=".avi",
             print(f"Error processing {video_file}: {e}")
 
 
-# Example usage
+
 if __name__ == "__main__":
     # Process a single video
     # process_video("path/to/your/video.avi", "output_poses", sample_rate=1, model_type='lightning')
