@@ -506,7 +506,7 @@ def batch_process_videos(video_dir, output_dir="output_poses", extension=".avi",
 if __name__ == "__main__":
     # Process a single video with skeleton visualization
     process_video(
-        "videos_of_good/A1.avi", 
+        "ML/data/kinect_good_vs_bad/G08.avi", 
         "output_poses_with_skeleton", 
         sample_rate=1, 
         model_type='thunder',
