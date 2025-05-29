@@ -15,6 +15,8 @@ from ugly_2d_detector import check_ugly_2d, UglyDetectionError
 from posenet_to_kinect2d import convert_to_kinect2d
 from kinect2d_to_kinect3d import add_depth_predictions
 from frame_trimmer import trim_frames
+from bad_3d_detector import check_bad_3d_exercise, BadExerciseError
+from exercise_scorer import score_exercise_with_interpretation
 
 # Configure logging
 logging.basicConfig(
@@ -94,7 +96,10 @@ async def process_video(file: UploadFile = File(...), background_tasks: Backgrou
             },
             "quality_scores": {
                 "ugly_2d_goodness": None,
-                "ugly_2d_confidence": None
+                "ugly_2d_confidence": None,
+                "bad_3d_exercise_score": None,
+                "final_exercise_score": None,
+                "score_interpretation": None
             }
         }
         
@@ -204,7 +209,73 @@ async def process_video(file: UploadFile = File(...), background_tasks: Backgrou
                             logger.info(f"Trim indices: [{trim_indices[0]}, {trim_indices[1]}]")
                             
                             jobs[job_id]["files"]["trimmed"] = str(trimmed_output_path)
-                            update_job_status(job_id, "completed", "Processing completed successfully")
+                            
+                            # Step 6: Check for bad exercise form (NEW STEP)
+                            try:
+                                update_job_status(job_id, "processing", "Analyzing exercise form quality")
+                                
+                                exercise_score = check_bad_3d_exercise(
+                                    input_csv=trimmed_output_path,
+                                    model_dir=MODEL_DIR
+                                )
+                                
+                                # Store exercise quality score
+                                jobs[job_id]["quality_scores"]["bad_3d_exercise_score"] = float(exercise_score)
+                                
+                                logger.info(f"Exercise form check passed - Quality score: {exercise_score:.3f}")
+                                
+                                # Step 7: Score the exercise (NEW STEP)
+                                try:
+                                    update_job_status(job_id, "processing", "Calculating final exercise score")
+                                    
+                                    final_score, score_interpretation = score_exercise_with_interpretation(
+                                        input_csv=trimmed_output_path,
+                                        model_dir=MODEL_DIR
+                                    )
+                                    
+                                    # Store final scoring results
+                                    jobs[job_id]["quality_scores"]["final_exercise_score"] = float(final_score)
+                                    jobs[job_id]["quality_scores"]["score_interpretation"] = score_interpretation
+                                    
+                                    logger.info(f"Exercise scoring complete - Score: {final_score:.3f} ({score_interpretation})")
+                                    update_job_status(job_id, "completed", 
+                                                    f"Processing completed successfully - Score: {final_score:.1f}/4.0 ({score_interpretation})")
+                                    
+                                except Exception as e:
+                                    # If scoring fails, log warning but still mark as completed
+                                    logger.warning(f"Exercise scoring failed, but exercise passed quality checks: {e}")
+                                    update_job_status(job_id, "completed", "Processing completed successfully (without scoring)")
+                                
+                            except BadExerciseError as e:
+                                # Exercise form is bad - stop pipeline and return error
+                                error_message = f"Exercise form check failed: {str(e)}"
+                                logger.error(error_message)
+                                update_job_status(job_id, "failed", error_message)
+                                return
+                            except Exception as e:
+                                # If bad exercise detection fails for other reasons, log warning but continue
+                                logger.warning(f"Bad exercise detection failed, continuing: {e}")
+                                
+                                # Still try to score the exercise
+                                try:
+                                    update_job_status(job_id, "processing", "Calculating final exercise score")
+                                    
+                                    final_score, score_interpretation = score_exercise_with_interpretation(
+                                        input_csv=trimmed_output_path,
+                                        model_dir=MODEL_DIR
+                                    )
+                                    
+                                    # Store final scoring results
+                                    jobs[job_id]["quality_scores"]["final_exercise_score"] = float(final_score)
+                                    jobs[job_id]["quality_scores"]["score_interpretation"] = score_interpretation
+                                    
+                                    logger.info(f"Exercise scoring complete - Score: {final_score:.3f} ({score_interpretation})")
+                                    update_job_status(job_id, "completed", 
+                                                    f"Processing completed successfully - Score: {final_score:.1f}/4.0 ({score_interpretation})")
+                                    
+                                except Exception as e2:
+                                    logger.warning(f"Exercise scoring also failed: {e2}")
+                                    update_job_status(job_id, "completed", "Processing completed successfully")
                             
                         except Exception as e:
                             logger.error(f"Error in frame trimming: {str(e)}")
@@ -391,3 +462,49 @@ async def get_trimmed_data(job_id: str):
         content = f.read()
     
     return content
+
+@app.get("/video-data/{job_id}/final")
+async def get_final_results(job_id: str):
+    """
+    Get the complete final results including all scores and trimmed 3D skeleton data
+    """
+    if job_id not in jobs:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Job not found: {job_id}",
+            headers={"error_type": "job_not_found"}
+        )
+    
+    job = jobs[job_id]
+    
+    if job["status"] not in ["completed", "failed"]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Job not finished: {job_id}",
+            headers={"error_type": "job_not_finished"}
+        )
+    
+    # Get the trimmed 3D skeleton data
+    trimmed_data = None
+    if job["files"]["trimmed"] and os.path.exists(job["files"]["trimmed"]):
+        with open(job["files"]["trimmed"], "r") as f:
+            trimmed_data = f.read()
+    elif job["files"]["kinect3d"] and os.path.exists(job["files"]["kinect3d"]):
+        # Fallback to kinect3d data if trimmed not available
+        with open(job["files"]["kinect3d"], "r") as f:
+            trimmed_data = f.read()
+    
+    # Prepare the complete response
+    response = {
+        "job_id": job_id,
+        "filename": job["filename"],
+        "status": job["status"],
+        "message": job["message"],
+        "created_at": job["created_at"],
+        "updated_at": job["updated_at"],
+        "quality_scores": job["quality_scores"],
+        "skeleton_data": trimmed_data,
+        "data_format": "kinect_3d_trimmed"
+    }
+    
+    return response
