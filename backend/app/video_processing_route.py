@@ -11,6 +11,7 @@ import time
 
 # Import the processing functions
 from movenet_extraction import process_video_file
+from ugly_2d_detector import check_ugly_2d, UglyDetectionError
 from posenet_to_kinect2d import convert_to_kinect2d
 from kinect2d_to_kinect3d import add_depth_predictions
 from frame_trimmer import trim_frames
@@ -55,14 +56,14 @@ async def process_video(file: UploadFile = File(...), background_tasks: Backgrou
     """
     Endpoint to process a video file through the complete pipeline:
     1. Extract poses with MoveNet
-    2. Convert to Kinect 2D format
-    3. Add depth predictions for Kinect 3D format
-    4. Trim frames to identify the relevant segment
+    2. Check for ugly/poor quality video (NEW)
+    3. Convert to Kinect 2D format
+    4. Add depth predictions for Kinect 3D format
+    5. Trim frames to identify the relevant segment
     """
     try:
         # Generate a unique job ID
         job_id = str(uuid.uuid4())
-        #job_id = "test"  # Shortened UUID for easier tracking
         
         # Create a job directory for this specific upload
         job_dir = OUTPUT_DIR / job_id
@@ -90,6 +91,10 @@ async def process_video(file: UploadFile = File(...), background_tasks: Backgrou
                 "kinect2d": None,
                 "kinect3d": None,
                 "trimmed": None
+            },
+            "quality_scores": {
+                "ugly_2d_goodness": None,
+                "ugly_2d_confidence": None
             }
         }
         
@@ -100,11 +105,55 @@ async def process_video(file: UploadFile = File(...), background_tasks: Backgrou
                 update_job_status(job_id, "processing", "Extracting poses with MoveNet")
 
                 movenet_output_filename = f"{Path(file_path).stem}_movenet.csv"
-                movenet_output_path = job_dir / movenet_output_filename  # Construct the full path
-                process_video_file(file_path, output_dir=str(movenet_output_path)) # Pass the full path as a string
+                movenet_output_path = job_dir / movenet_output_filename
+                process_video_file(file_path, output_dir=str(movenet_output_path))
 
                 logger.info(f"MoveNet processing complete, results saved to {movenet_output_path}")
                 jobs[job_id]["files"]["original"] = str(movenet_output_path)
+                
+                # Step 2: Check for ugly/poor quality video (NEW STEP)
+                try:
+                    update_job_status(job_id, "processing", "Checking video quality")
+                    
+                    goodness_score, confidence_score = check_ugly_2d(
+                        video_path=file_path,
+                        pose_csv_path=movenet_output_path,
+                        model_dir=MODEL_DIR
+                    )
+                    
+                    # Store quality scores
+                    jobs[job_id]["quality_scores"]["ugly_2d_goodness"] = float(goodness_score)
+                    jobs[job_id]["quality_scores"]["ugly_2d_confidence"] = float(confidence_score)
+                    
+                    logger.info(f"Video quality check passed - Goodness: {goodness_score:.3f}, Confidence: {confidence_score:.3f}")
+                    
+                    # After ugly detection, we might have a new CSV with confidence scores
+                    # We need to create a version without confidence for the rest of the pipeline
+                    confidence_csv_path = movenet_output_path.parent / f"{movenet_output_path.stem}_with_confidence.csv"
+                    if confidence_csv_path.exists():
+                        # Create a version without confidence scores for the pipeline
+                        logger.info("Removing confidence scores for pipeline compatibility")
+                        df_with_conf = pd.read_csv(confidence_csv_path)
+                        
+                        # Keep only x,y coordinates and FrameNo, drop confidence columns
+                        columns_to_keep = ['FrameNo']
+                        for col in df_with_conf.columns:
+                            if col.endswith('_x') or col.endswith('_y'):
+                                columns_to_keep.append(col)
+                        
+                        df_without_conf = df_with_conf[columns_to_keep]
+                        df_without_conf.to_csv(movenet_output_path, index=False)
+                        logger.info(f"Saved pipeline-compatible pose data to {movenet_output_path}")
+                    
+                except UglyDetectionError as e:
+                    # Video is too ugly to process - stop pipeline and return error
+                    error_message = f"Video quality check failed: {str(e)}"
+                    logger.error(error_message)
+                    update_job_status(job_id, "failed", error_message)
+                    return
+                except Exception as e:
+                    # If ugly detection fails for other reasons, log warning but continue
+                    logger.warning(f"Ugly detection failed, continuing with pipeline: {e}")
                 
                 # Check if model directory exists for subsequent steps
                 if not MODEL_DIR.exists():
@@ -112,12 +161,11 @@ async def process_video(file: UploadFile = File(...), background_tasks: Backgrou
                     update_job_status(job_id, "completed", "Processing completed (without models)")
                     return
                 
-                # Step 2: Convert MoveNet output to Kinect 2D format
+                # Step 3: Convert MoveNet output to Kinect 2D format
                 try:
                     update_job_status(job_id, "processing", "Converting to Kinect 2D format")
                     
                     kinect2d_output_path = job_dir / f"{Path(file_path).stem}_kinect2d.csv"
-                    print("Kinect Path" , kinect2d_output_path)
                     convert_to_kinect2d(
                         input_csv=movenet_output_path,
                         output_csv=kinect2d_output_path,
@@ -127,7 +175,7 @@ async def process_video(file: UploadFile = File(...), background_tasks: Backgrou
                     logger.info(f"Kinect 2D conversion complete, results saved to {kinect2d_output_path}")
                     jobs[job_id]["files"]["kinect2d"] = str(kinect2d_output_path)
                     
-                    # Step 3: Add depth predictions to get Kinect 3D format
+                    # Step 4: Add depth predictions to get Kinect 3D format
                     try:
                         update_job_status(job_id, "processing", "Adding depth predictions for Kinect 3D format")
                         
@@ -141,14 +189,13 @@ async def process_video(file: UploadFile = File(...), background_tasks: Backgrou
                         logger.info(f"Kinect 3D conversion complete, results saved to {kinect3d_output_path}")
                         jobs[job_id]["files"]["kinect3d"] = str(kinect3d_output_path)
                         
-                        # Step 4: Trim frames to identify the relevant segment
-                        # This step uses the Kinect 3D data specifically
+                        # Step 5: Trim frames to identify the relevant segment
                         try:
                             update_job_status(job_id, "processing", "Trimming frames to identify relevant segment")
                             
                             trimmed_output_path = job_dir / f"{Path(file_path).stem}_trimmed.csv"
                             trim_result, trim_indices = trim_frames(
-                                input_csv=kinect3d_output_path,  # Specifically use Kinect 3D data
+                                input_csv=kinect3d_output_path,
                                 output_csv=trimmed_output_path,
                                 model_dir=MODEL_DIR
                             )
@@ -161,18 +208,15 @@ async def process_video(file: UploadFile = File(...), background_tasks: Backgrou
                             
                         except Exception as e:
                             logger.error(f"Error in frame trimming: {str(e)}")
-                            # If trimming fails, use the Kinect 3D data
                             jobs[job_id]["files"]["trimmed"] = jobs[job_id]["files"]["kinect3d"]
                             update_job_status(job_id, "completed", "Processing completed with errors in trimming")
                     except Exception as e:
                         logger.error(f"Error in Kinect 3D conversion: {str(e)}")
-                        # If 3D conversion fails, we cannot do trimming which requires 3D data
                         jobs[job_id]["files"]["kinect3d"] = jobs[job_id]["files"]["kinect2d"]
                         jobs[job_id]["files"]["trimmed"] = jobs[job_id]["files"]["kinect2d"]
                         update_job_status(job_id, "completed", "Processing completed with errors in 3D conversion")
                 except Exception as e:
                     logger.error(f"Error in Kinect 2D conversion: {str(e)}")
-                    # If 2D conversion fails, we cannot proceed to 3D or trimming
                     jobs[job_id]["files"]["kinect2d"] = jobs[job_id]["files"]["original"]
                     jobs[job_id]["files"]["kinect3d"] = jobs[job_id]["files"]["original"]
                     jobs[job_id]["files"]["trimmed"] = jobs[job_id]["files"]["original"]
