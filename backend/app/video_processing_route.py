@@ -99,7 +99,8 @@ async def process_video(file: UploadFile = File(...), background_tasks: Backgrou
                 "ugly_2d_confidence": None,
                 "bad_3d_exercise_score": None,
                 "final_exercise_score": None,
-                "score_interpretation": None
+                "score_interpretation": None,
+                "advanced_analysis": None
             }
         }
         
@@ -120,17 +121,34 @@ async def process_video(file: UploadFile = File(...), background_tasks: Backgrou
                 try:
                     update_job_status(job_id, "processing", "Checking video quality")
                     
-                    goodness_score, confidence_score = check_ugly_2d(
+                    result = check_ugly_2d(
                         video_path=file_path,
                         pose_csv_path=movenet_output_path,
                         model_dir=MODEL_DIR
                     )
                     
+                    # Handle different return formats (with or without advanced analysis)
+                    if len(result) == 3:
+                        goodness_score, confidence_score, advanced_analysis = result
+                    else:
+                        goodness_score, confidence_score = result
+                        advanced_analysis = {}
+                    
                     # Store quality scores
                     jobs[job_id]["quality_scores"]["ugly_2d_goodness"] = float(goodness_score)
                     jobs[job_id]["quality_scores"]["ugly_2d_confidence"] = float(confidence_score)
+                    jobs[job_id]["quality_scores"]["advanced_analysis"] = advanced_analysis
                     
                     logger.info(f"Video quality check passed - Goodness: {goodness_score:.3f}, Confidence: {confidence_score:.3f}")
+                    
+                    # Log advanced analysis if available
+                    if advanced_analysis and advanced_analysis.get("analysis_type") == "advanced_quality":
+                        overall = advanced_analysis.get("overall_assessment", {})
+                        if overall:
+                            logger.info(f"Advanced analysis - Quality: {overall.get('assessment', 'unknown')}, "
+                                      f"Score: {overall.get('quality_score', 0):.2f}")
+                            if overall.get("issues_detected"):
+                                logger.info(f"Issues detected: {', '.join(overall['issues_detected'])}")
                     
                     # After ugly detection, we might have a new CSV with confidence scores
                     # We need to create a version without confidence for the rest of the pipeline
@@ -151,9 +169,30 @@ async def process_video(file: UploadFile = File(...), background_tasks: Backgrou
                         logger.info(f"Saved pipeline-compatible pose data to {movenet_output_path}")
                     
                 except UglyDetectionError as e:
-                    # Video is too ugly to process - stop pipeline and return error
+                    # Video is too ugly to process - but capture analysis data for diagnostics
                     error_message = f"Video quality check failed: {str(e)}"
                     logger.error(error_message)
+                    
+                    # Extract analysis data from the exception if available
+                    if hasattr(e, 'advanced_analysis'):
+                        jobs[job_id]["quality_scores"]["advanced_analysis"] = e.advanced_analysis
+                    if hasattr(e, 'goodness_score'):
+                        jobs[job_id]["quality_scores"]["ugly_2d_goodness"] = e.goodness_score
+                    if hasattr(e, 'confidence_score'):
+                        jobs[job_id]["quality_scores"]["ugly_2d_confidence"] = e.confidence_score
+                    
+                    # Log detailed diagnostics if available
+                    if hasattr(e, 'advanced_analysis') and e.advanced_analysis:
+                        advanced = e.advanced_analysis
+                        if advanced.get("analysis_type") == "advanced_quality":
+                            overall = advanced.get("overall_assessment", {})
+                            if overall:
+                                logger.error(f"Video failed with quality assessment: {overall.get('assessment', 'unknown')}")
+                                if overall.get("issues_detected"):
+                                    logger.error(f"Specific issues: {', '.join(overall['issues_detected'])}")
+                                if overall.get("recommendation"):
+                                    logger.error(f"Recommendation: {overall['recommendation']}")
+                    
                     update_job_status(job_id, "failed", error_message)
                     return
                 except Exception as e:
@@ -463,10 +502,34 @@ async def get_trimmed_data(job_id: str):
     
     return content
 
+@app.get("/video-data/{job_id}/untrimmed", response_class=PlainTextResponse)
+async def get_untrimmed_data(job_id: str):
+    """
+    Get the untrimmed (full) 3D data for a specific job
+    """
+    if job_id not in jobs:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Job not found: {job_id}",
+            headers={"error_type": "job_not_found"}
+        )
+    
+    job = jobs[job_id]
+    
+    if job["status"] not in ["completed", "failed"]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Job not finished: {job_id}",
+            headers={"error_type": "job_not_finished"}
+        )
+    
+    # Return the full kinect3d data (untrimmed)
+    return await get_kinect3d_data(job_id)
+
 @app.get("/video-data/{job_id}/final")
 async def get_final_results(job_id: str):
     """
-    Get the complete final results including all scores and trimmed 3D skeleton data
+    Get the complete final results including all scores and both trimmed + untrimmed 3D skeleton data
     """
     if job_id not in jobs:
         raise HTTPException(
@@ -494,6 +557,16 @@ async def get_final_results(job_id: str):
         with open(job["files"]["kinect3d"], "r") as f:
             trimmed_data = f.read()
     
+    # Get the untrimmed (full) 3D skeleton data
+    untrimmed_data = None
+    if job["files"]["kinect3d"] and os.path.exists(job["files"]["kinect3d"]):
+        with open(job["files"]["kinect3d"], "r") as f:
+            untrimmed_data = f.read()
+    elif job["files"]["kinect2d"] and os.path.exists(job["files"]["kinect2d"]):
+        # Fallback to kinect2d data if kinect3d not available
+        with open(job["files"]["kinect2d"], "r") as f:
+            untrimmed_data = f.read()
+    
     # Prepare the complete response
     response = {
         "job_id": job_id,
@@ -503,8 +576,14 @@ async def get_final_results(job_id: str):
         "created_at": job["created_at"],
         "updated_at": job["updated_at"],
         "quality_scores": job["quality_scores"],
-        "skeleton_data": trimmed_data,
-        "data_format": "kinect_3d_trimmed"
+        "skeleton_data": {
+            "trimmed": trimmed_data,
+            "untrimmed": untrimmed_data
+        },
+        "data_formats": {
+            "trimmed": "kinect_3d_trimmed_exercise_segment",
+            "untrimmed": "kinect_3d_full_sequence"
+        }
     }
     
     return response
