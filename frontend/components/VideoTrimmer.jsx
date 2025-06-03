@@ -901,23 +901,23 @@ export function VideoTrimmer() {
           {error && (
             <>
               <Alert variant="destructive" className="mt-4">
-                <AlertTitle>Error</AlertTitle>
-                <AlertDescription>Bad Video - Please reshoot and keep these quick tips in mind so our system can read your moves accurately.</AlertDescription>
+                <AlertDescription className="space-y-3">
+                  <div className="text-white font-medium text-lg">
+                    Bad Video – Please reshoot and keep these quick tips in mind so our system can read your moves accurately:
+                  </div>
+
+                  <div className="mt-3 p-3 rounded-md bg-gray-900 text-sm text-white max-h-64 overflow-y-auto shadow-inner border border-gray-700">
+                    <ul className="list-disc pl-5 space-y-1">
+                      {tips.map((tip, idx) => (
+                        <li key={idx}>{tip}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </AlertDescription>
               </Alert>
 
-
-              <div className="mt-3 flex justify-center">
-                <Button
-                  onClick={() => setShowTipsBox(true)}
-                  className="bg-purple-600 hover:bg-purple-700 text-white"
-                >
-                  Show Tips
-                </Button>
-              </div>
-
-
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
-                {/* --- WORST CONFIDENCE CARD (video “ugly”) --- */}
+                {/* --- WORST CONFIDENCE CARD (video "ugly") --- */}
                 <Card className="
       group 
       shadow-xl 
@@ -979,7 +979,7 @@ export function VideoTrimmer() {
                   </CardContent>
                 </Card>
 
-                {/* --- MOST JITTERY CARD (video “ugly”) --- */}
+                {/* --- MOST JITTERY CARD (video "ugly") --- */}
                 <Card className="
       group 
       shadow-xl 
@@ -1094,12 +1094,14 @@ export function VideoTrimmer() {
         </CardContent>
       </Card>
 
-      {originalData.length > 0 && trimmedData.length > 0 && (
-        <SkeletonProvider>
-          <CustomAnimationManager />
-          <FrameVisualizer />
-        </SkeletonProvider>
-      )}
+      {
+        originalData.length > 0 && trimmedData.length > 0 && (
+          <SkeletonProvider>
+            <CustomAnimationManager />
+            <FrameVisualizer />
+          </SkeletonProvider>
+        )
+      }
 
 
       {
@@ -1133,9 +1135,8 @@ export function VideoTrimmer() {
           </>
         )
       }
-    </div>
+    </div >
   );
 
 
 }
-
