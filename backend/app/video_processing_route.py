@@ -278,7 +278,7 @@ async def process_video(file: UploadFile = File(...), background_tasks: Backgrou
                                     
                                     logger.info(f"Exercise scoring complete - Score: {final_score:.3f} ({score_interpretation})")
                                     update_job_status(job_id, "completed", 
-                                                    f"Processing completed successfully - Score: {final_score:.1f}/4.0 ({score_interpretation})")
+                                                    f"Processing completed successfully - Score: {final_score:.1f}/5.0 ({score_interpretation})")
                                     
                                 except Exception as e:
                                     # If scoring fails, log warning but still mark as completed
@@ -310,7 +310,7 @@ async def process_video(file: UploadFile = File(...), background_tasks: Backgrou
                                     
                                     logger.info(f"Exercise scoring complete - Score: {final_score:.3f} ({score_interpretation})")
                                     update_job_status(job_id, "completed", 
-                                                    f"Processing completed successfully - Score: {final_score:.1f}/4.0 ({score_interpretation})")
+                                                    f"Processing completed successfully - Score: {final_score:.1f}/5.0 ({score_interpretation})")
                                     
                                 except Exception as e2:
                                     logger.warning(f"Exercise scoring also failed: {e2}")
