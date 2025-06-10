@@ -34,32 +34,6 @@ export default function MLDashboard() {
         </div>
 
         {/* Tabs container */}
-        <Tabs
-          defaultValue="video-trimmer"
-          onValueChange={(value: string) => setActiveTab(value)}
-        >
-          <TabsList
-            className="
-            flex space-x-4 mb-6
-            bg-black/20
-            p-1 rounded-full
-          "
-          >
-            <TabsTrigger
-              value="video-trimmer"
-              className={`
-              flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-colors duration-200
-              ${activeTab === "video-trimmer"
-                  ? "bg-gradient-to-br from-purple-600 to-pink-500 text-white"
-                  : "text-white/70 hover:bg-white/10"
-                }
-            `}
-            >
-              <Upload className="h-4 w-4" />
-              Video Trimmer
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
 
         {/* Video Trimmer Content */}
         {activeTab === "video-trimmer" && (
@@ -67,7 +41,7 @@ export default function MLDashboard() {
             {/* Header for Video Trimmer */}
             <div className="mb-6 text-center">
               <h3 className="text-2xl font-semibold text-white">
-                Video Trimmer
+                AI-Powered Exercise Evaluation Platform
               </h3>
               <p className="mt-1 text-sm text-gray-300">
                 Upload a video to process

@@ -26,7 +26,7 @@ export default function Dashboard() {
       <div className="container mx-auto p-6">
         <div className="mb-8">
           <h1 className="text-4xl font-bold text-slate-900 dark:text-slate-100 mb-2">
-            Exercise Video Analysis
+            AI-Powered Exercise Evaluation Platform
           </h1>
           <p className="text-slate-600 dark:text-slate-400 text-lg">
             AI-powered video processing pipeline for exercise form analysis and
