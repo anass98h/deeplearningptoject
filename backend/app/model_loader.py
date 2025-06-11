@@ -29,9 +29,9 @@ class ModelInfo:
 class ModelLoader:
     def __init__(
         self, 
-        regression_dir: str = "../ML/regression_models",
-        classifier_dir: str = "../ML/classifier_models",
-        depth_dir: str = "../ML/depth_models"
+        regression_dir: str = "ML/regression_models",
+        classifier_dir: str = "ML/classifier_models",
+        depth_dir: str = "ML/depth_models"
     ):
         self.regression_dir = Path(regression_dir)
         self.classifier_dir = Path(classifier_dir)
