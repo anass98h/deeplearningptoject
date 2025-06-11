@@ -8,6 +8,7 @@ import shutil
 from pathlib import Path
 import uuid
 import time
+import pandas as pd
 
 # Import the processing functions
 from movenet_extraction import process_video_file
